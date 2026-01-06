@@ -12,7 +12,6 @@ on:
 jobs:
   build:
     name: Build Containers
-    if: github.repository == 'xibosignage/xibo-cms'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -38,7 +37,7 @@ jobs:
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: ghcr.io/xibosignage/xibo-cms:latest
+          tags: ghcr.io/magnocat/xibo-cms:latest
           build-args: GIT_COMMIT=${{ github.sha }}
           push: true
           load: false
@@ -51,7 +50,7 @@ jobs:
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: ghcr.io/xibosignage/xibo-cms:${{ github.ref_name }}
+          tags: ghcr.io/magnocat/xibo-cms:${{ github.ref_name }}
           build-args: GIT_COMMIT=${{ github.sha }}
           push: true
           load: false

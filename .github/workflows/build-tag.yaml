@@ -8,7 +8,6 @@ on:
 jobs:
   build:
     name: Build Containers
-    if: github.repository == 'xibosignage/xibo-cms'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -32,18 +31,18 @@ jobs:
           context: .
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: ghcr.io/xibosignage/xibo-cms:release-${{ github.ref_name }}
+          tags: ghcr.io/magnocat/xibo-cms:release-${{ github.ref_name }}
           build-args: GIT_COMMIT=${{ github.sha }}
           push: true
           load: false
 
       - name: Pull Image
         run: |
-          docker pull ghcr.io/xibosignage/xibo-cms:release-${GITHUB_REF##*/}
+          docker pull ghcr.io/magnocat/xibo-cms:release-${GITHUB_REF##*/}
 
       - name: Build archive
         run: |
-          CONTAINER=$(docker create ghcr.io/xibosignage/xibo-cms:release-${GITHUB_REF##*/})
+          CONTAINER=$(docker create ghcr.io/magnocat/xibo-cms:release-${GITHUB_REF##*/})
           echo 'Copying from container.'
           docker cp "$CONTAINER":/var/www/cms/ xibo-cms-${GITHUB_REF##*/}
           tar -czf xibo-cms-${GITHUB_REF##*/}.tar.gz xibo-cms-${GITHUB_REF##*/}
