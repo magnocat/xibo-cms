@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2025 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -32,28 +32,18 @@ $app->get('/welcome', ['\Xibo\Controller\User', 'welcome'])->setName('welcome.vi
 // Dashboards
 //
 $app->group('', function(RouteCollectorProxy $group) {
-    $group->get('/statusdashboard', ['\Xibo\Controller\StatusDashboard', 'displayPage'])
-        ->setName('statusdashboard.view');
     $group->get('/statusdashboard/displays', ['\Xibo\Controller\StatusDashboard', 'displays'])
         ->setName('statusdashboard.displays');
     $group->get('/statusdashboard/displayGroups', ['\Xibo\Controller\StatusDashboard', 'displayGroups'])
         ->setName('statusdashboard.displayGroups');
 })->add(new FeatureAuth($app->getContainer(), ['dashboard.status']));
 
-// Everyone has access to this dashboard.
-$app->get('/icondashboard', ['\Xibo\Controller\IconDashboard', 'displayPage'])
-    ->setName('icondashboard.view');
-
 $app->group('', function (RouteCollectorProxy $group) {
-    $group->get('/mediamanager', ['\Xibo\Controller\MediaManager', 'displayPage'])
-        ->setName('mediamanager.view');
     $group->get('/mediamanager/data', ['\Xibo\Controller\MediaManager', 'grid'])
         ->setName('mediamanager.search');
 })->add(new FeatureAuth($app->getContainer(), ['dashboard.media.manager']));
 
 $app->group('', function (RouteCollectorProxy $group) {
-    $group->get('/playlistdashboard', ['\Xibo\Controller\PlaylistDashboard', 'displayPage'])
-        ->setName('playlistdashboard.view');
     $group->get('/playlistdashboard/data', ['\Xibo\Controller\PlaylistDashboard', 'grid'])
         ->setName('playlistdashboard.search');
     $group->get('/playlistdashboard/{id}', ['\Xibo\Controller\PlaylistDashboard', 'show'])
@@ -77,32 +67,6 @@ $app->get('/logout', ['\Xibo\Controller\Login','logout'])->setName('logout');
 
 // Ping pong route
 $app->get('/login/ping', ['\Xibo\Controller\Login','PingPong'])->setName('ping');
-
-//
-// schedule
-//
-$app->get('/schedule/view', ['\Xibo\Controller\Schedule','displayPage'])
-    ->add(new FeatureAuth($app->getContainer(), ['schedule.view']))
-    ->setName('schedule.view');
-
-$app->get('/schedule/grid/view', ['\Xibo\Controller\Schedule','gridPage'])
-    ->add(new FeatureAuth($app->getContainer(), ['schedule.view']))
-    ->setName('schedule.grid.view');
-
-$app->get('/schedule/form/add[/{from}/{id}]', ['\Xibo\Controller\Schedule','addForm'])
-    ->add(new FeatureAuth($app->getContainer(), ['schedule.add']))
-    ->setName('schedule.add.form');
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/schedule/form/edit/{id}', ['\Xibo\Controller\Schedule', 'editForm'])
-        ->setName('schedule.edit.form');
-
-    $group->get('/schedule/form/delete/{id}', ['\Xibo\Controller\Schedule', 'deleteForm'])
-        ->setName('schedule.delete.form');
-
-    $group->get('/schedulerecurrence/form/delete/{id}', ['\Xibo\Controller\Schedule', 'deleteRecurrenceForm'])
-        ->setName('schedule.recurrence.delete.form');
-})->add(new FeatureAuth($app->getContainer(), ['schedule.modify']));
 
 //
 // notification
@@ -129,21 +93,10 @@ $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
 //
 // layouts
 //
-$app->get('/layout/view', ['\Xibo\Controller\Layout', 'displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['layout.view']))
-    ->setName('layout.view');
-
 $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
     $group->get('/layout/xlf/{id}', ['\Xibo\Controller\Preview', 'getXlf'])->setName('layout.getXlf');
     $group->get('/layout/background/{id}', ['\Xibo\Controller\Layout', 'downloadBackground'])->setName('layout.download.background');
-    $group->get('/layout/thumbnail/{id}', ['\Xibo\Controller\Layout', 'downloadThumbnail'])->setName('layout.download.thumbnail');
-    $group->get('/layout/playerBundle', ['\Xibo\Controller\Preview', 'playerBundle'])->setName('layout.preview.bundle');
-    $group->get('/connector/widget/preview', ['\Xibo\Controller\Connector', 'connectorPreview'])->setName('layout.preview.connector');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['layout.view', 'template.view']));
-
-$app->get('/layout/preview/{id}', ['\Xibo\Controller\Preview', 'show'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['layout.view', 'template.view', 'campaign.view']))
-    ->setName('layout.preview');
 
 // forms
 $app->get('/layout/form/add', ['\Xibo\Controller\Layout','addForm'])
@@ -154,25 +107,13 @@ $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
     $group->get('/layout/designer[/{id}]', ['\Xibo\Controller\Layout','displayDesigner'])->setName('layout.designer');
     $group->get('/layout/form/edit/{id}', ['\Xibo\Controller\Layout', 'editForm'])->setName('layout.edit.form');
     $group->get('/layout/form/background/{id}', ['\Xibo\Controller\Layout', 'editBackgroundForm'])->setName('layout.background.form');
-    $group->get('/layout/form/copy/{id}', ['\Xibo\Controller\Layout', 'copyForm'])->setName('layout.copy.form');
     $group->get('/layout/form/delete/{id}', ['\Xibo\Controller\Layout', 'deleteForm'])->setName('layout.delete.form');
     $group->get('/layout/form/clear/{id}', ['\Xibo\Controller\Layout', 'clearForm'])->setName('layout.clear.form');
     $group->get('/layout/form/checkout/{id}', ['\Xibo\Controller\Layout', 'checkoutForm'])->setName('layout.checkout.form');
     $group->get('/layout/form/publish/{id}', ['\Xibo\Controller\Layout', 'publishForm'])->setName('layout.publish.form');
     $group->get('/layout/form/discard/{id}', ['\Xibo\Controller\Layout', 'discardForm'])->setName('layout.discard.form');
     $group->get('/layout/form/retire/{id}', ['\Xibo\Controller\Layout', 'retireForm'])->setName('layout.retire.form');
-    $group->get('/layout/form/unretire/{id}', ['\Xibo\Controller\Layout', 'unretireForm'])->setName('layout.unretire.form');
-    $group->get('/layout/form/setenablestat/{id}', ['\Xibo\Controller\Layout', 'setEnableStatForm'])->setName('layout.setenablestat.form');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['layout.modify', 'template.modify']));
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/layout/form/export/{id}', ['\Xibo\Controller\Layout', 'exportForm'])->setName('layout.export.form');
-    $group->get('/layout/export/{id}', ['\Xibo\Controller\Layout', 'export'])->setName('layout.export');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['layout.export']));
-
-$app->get('/layout/form/campaign/assign/{id}', ['\Xibo\Controller\Layout','assignToCampaignForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['campaign.modify']))
-    ->setName('layout.assignTo.campaign.form');
 
 // Layout with Codes
 $app->get('/layout/codes', ['\Xibo\Controller\Layout', 'getLayoutCodes'])->setName('layout.code.search');
@@ -189,15 +130,6 @@ $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
 
     // Designer
     $group->get('/playlist/form/library/assign/{id}', ['\Xibo\Controller\Playlist','libraryAssignForm'])->setName('playlist.library.assign.form');
-
-    // Outputs
-    $group->get('/playlist/widget/resource/{regionId}[/{id}]', [
-        '\Xibo\Controller\Widget', 'getResource'
-    ])->setName('module.getResource');
-
-    $group->get('/playlist/widget/data/{regionId}/{id}', [
-        '\Xibo\Controller\Widget', 'getData'
-    ])->setName('module.getData');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['layout.modify']));
 
 $app->group('', function (\Slim\Routing\RouteCollectorProxy $group) {
@@ -211,27 +143,13 @@ $app->group('', function (\Slim\Routing\RouteCollectorProxy $group) {
 //
 // playlists
 //
-$app->get('/playlist/view', ['\Xibo\Controller\Playlist','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['playlist.view']))
-    ->setName('playlist.view');
-
-$app->get('/playlist/form/add', ['\Xibo\Controller\Playlist','addForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['playlist.add']))
-    ->setName('playlist.add.form');
-
 $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/playlist/form/edit/{id}', ['\Xibo\Controller\Playlist', 'editForm'])->setName('playlist.edit.form');
-    $group->get('/playlist/form/copy/{id}', ['\Xibo\Controller\Playlist', 'copyForm'])->setName('playlist.copy.form');
-    $group->get('/playlist/form/delete/{id}', ['\Xibo\Controller\Playlist', 'deleteForm'])->setName('playlist.delete.form');
-    $group->get('/playlist/form/setenablestat/{id}', ['\Xibo\Controller\Playlist','setEnableStatForm'])->setName('playlist.setenablestat.form');
-    $group->get('/playlist/form/{id}/selectfolder', ['\Xibo\Controller\Playlist','selectFolderForm'])->setName('playlist.selectfolder.form');
+    $group->get('/playlist/form/edit/{id}', ['\Xibo\Controller\Playlist', 'editForm'])
+        ->setName('playlist.edit.form');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['playlist.modify']));
 
-$app->get('/playlist/form/timeline/{id}', ['\Xibo\Controller\Playlist','timelineForm'])->setName('playlist.timeline.form');
-
-$app->get('/playlist/form/usage/{id}', ['\Xibo\Controller\Playlist','usageForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['schedule.view', 'layout.view']))
-    ->setName('playlist.usage.form');
+$app->get('/playlist/form/timeline/{id}', ['\Xibo\Controller\Playlist','timelineForm'])
+    ->setName('playlist.timeline.form');
 
 //
 // library
@@ -242,58 +160,17 @@ $app->get('/library/search', ['\Xibo\Controller\Library','search'])
 $app->get('/library/connector/list', ['\Xibo\Controller\Library','providersList'])
     ->setName('library.search.providers');
 
-$app->get('/library/view', ['\Xibo\Controller\Library','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['library.view']))
-    ->setName('library.view');
-
-$app->get('/library/form/uploadUrl', ['\Xibo\Controller\Library','uploadFromUrlForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['library.add']))
-    ->setName('library.uploadUrl.form');
-
 $app->post('/library/connector/import', ['\Xibo\Controller\Library', 'connectorImport'])
     ->addMiddleware(new FeatureAuth($app->getContainer(), ['library.add']))
     ->setName('library.connector.import');
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/library/form/edit/{id}', ['\Xibo\Controller\Library', 'editForm'])->setName('library.edit.form');
-    $group->get('/library/form/delete/{id}', ['\Xibo\Controller\Library', 'deleteForm'])->setName('library.delete.form');
-    $group->get('/library/form/tidy', ['\Xibo\Controller\Library', 'tidyForm'])->setName('library.tidy.form');
-    $group->get('/library/form/copy/{id}', ['\Xibo\Controller\Library','copyForm'])->setName('library.copy.form');
-    $group->get('/library/form/setenablestat/{id}', ['\Xibo\Controller\Library','setEnableStatForm'])->setName('library.setenablestat.form');
-    $group->get('/library/form/{id}/selectfolder', ['\Xibo\Controller\Library','selectFolderForm'])->setName('library.selectfolder.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['library.modify']));
-
-$app->get('/library/form/usage/{id}', ['\Xibo\Controller\Library','usageForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['schedule.view', 'layout.view']))
-    ->setName('library.usage.form');
 
 //
 // display
 //
 $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
     $group->get('/display/map', ['\Xibo\Controller\Display', 'displayMap'])->setName('display.map');
-    $group->get('/display/view', ['\Xibo\Controller\Display', 'displayPage'])->setName('display.view');
     $group->get('/display/manage/{id}', ['\Xibo\Controller\Display', 'displayManage'])->setName('display.manage');
-    $group->get('/display/form/screenshot/{id}', ['\Xibo\Controller\Display','requestScreenShotForm'])->setName('display.screenshot.form');
-    $group->get('/display/form/wol/{id}', ['\Xibo\Controller\Display','wakeOnLanForm'])->setName('display.wol.form');
-    $group->get('/display/form/licenceCheck/{id}', ['\Xibo\Controller\Display','checkLicenceForm'])->setName('display.licencecheck.form');
-    $group->get('/display/form/purgeAll/{id}', ['\Xibo\Controller\Display','purgeAllForm'])->setName('display.purge.all.form');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['displays.view']));
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/display/form/addViaCode', ['\Xibo\Controller\Display','addViaCodeForm'])->setName('display.addViaCode.form');
-    $group->get('/display/form/authorise/{id}', ['\Xibo\Controller\Display','authoriseForm'])->setName('display.authorise.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['displays.add']));
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/display/form/edit/{id}', ['\Xibo\Controller\Display', 'editForm'])->setName('display.edit.form');
-    $group->get('/display/form/delete/{id}', ['\Xibo\Controller\Display', 'deleteForm'])->setName('display.delete.form');
-    $group->get('/display/form/defaultlayout/{id}', ['\Xibo\Controller\Display','defaultLayoutForm'])->setName('display.defaultlayout.form');
-    $group->get('/display/form/moveCms/{id}', ['\Xibo\Controller\Display','moveCmsForm'])->setName('display.moveCms.form');
-    $group->get('/display/form/moveCmsCancel/{id}', ['\Xibo\Controller\Display','moveCmsCancelForm'])->setName('display.moveCmsCancel.form');
-    $group->get('/display/form/membership/{id}', ['\Xibo\Controller\Display','membershipForm'])->setName('display.membership.form');
-    $group->get('/display/form/setBandwidthLimit', ['\Xibo\Controller\Display','setBandwidthLimitMultipleForm'])->setName('display.setBandwidthLimitMultiple.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['displays.modify']));
 
 //
 // user
@@ -345,19 +222,8 @@ $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
 //
 // campaign
 //
-$app->get('/campaign/view', ['\Xibo\Controller\Campaign','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['campaign.view']))
-    ->setName('campaign.view');
-
-$app->get('/campaign/form/add', ['\Xibo\Controller\Campaign','addForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['campaign.add']))
-    ->setName('campaign.add.form');
-
 $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
     $group->get('/campaign/form/edit/{id}', ['\Xibo\Controller\Campaign', 'editForm'])->setName('campaign.edit.form');
-    $group->get('/campaign/form/copy/{id}', ['\Xibo\Controller\Campaign', 'copyForm'])->setName('campaign.copy.form');
-    $group->get('/campaign/form/delete/{id}', ['\Xibo\Controller\Campaign', 'deleteForm'])->setName('campaign.delete.form');
-    $group->get('/campaign/form/retire/{id}', ['\Xibo\Controller\Campaign', 'retireForm'])->setName('campaign.retire.form');
     $group->get('/campaign/form/layout/remove/{id}', ['\Xibo\Controller\Campaign', 'removeLayoutForm'])
         ->setName('campaign.layout.remove.form');
 
@@ -365,10 +231,6 @@ $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
         ->addMiddleware(new FeatureAuth($group->getContainer(), ['ad.campaign']))
         ->setName('campaign.builder');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['campaign.modify']));
-
-$app->get('/campaign/form/{id}/selectfolder', ['\Xibo\Controller\Campaign','selectFolderForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['campaign.modify', 'layout.modify']))
-    ->setName('campaign.selectfolder.form');
 
 $app->get('/campaign/{id}/preview', ['\Xibo\Controller\Campaign','preview'])
     ->addMiddleware(new FeatureAuth($app->getContainer(), ['campaign.view', 'layout.view']))
@@ -380,120 +242,21 @@ $app->get('/campaign/{id}/preview', ['\Xibo\Controller\Campaign','preview'])
 $app->get('/template/connector/list', ['\Xibo\Controller\Template','providersList'])
     ->setName('template.search.providers');
 $app->get('/template/search', ['\Xibo\Controller\Template', 'search'])->setName('template.search.all');
-$app->get('/template/view', ['\Xibo\Controller\Template','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['template.view']))
-    ->setName('template.view');
 
 $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
     $group->get('/template/form/layout/{id}', ['\Xibo\Controller\Template', 'addTemplateForm'])->setName('template.from.layout.form');
-    $group->get('/template/form/add', ['\Xibo\Controller\Template', 'addForm'])->setName('template.add.form');
-    $group->get('/template/form/edit/{id}', ['\Xibo\Controller\Template', 'editForm'])->setName('template.edit.form');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['template.add']));
-
-//
-// resolution
-//
-$app->get('/resolution/view', ['\Xibo\Controller\Resolution','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['resolution.view']))
-    ->setName('resolution.view');
-
-$app->get('/resolution/form/add', ['\Xibo\Controller\Resolution','addForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['resolution.add']))
-    ->setName('resolution.add.form');
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/resolution/form/edit/{id}', ['\Xibo\Controller\Resolution', 'editForm'])->setName('resolution.edit.form');
-    $group->get('/resolution/form/delete/{id}', ['\Xibo\Controller\Resolution', 'deleteForm'])->setName('resolution.delete.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['resolution.modify']));
 
 //
 // dataset
 //
-$app->get('/dataset/view', ['\Xibo\Controller\DataSet','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['dataset.view']))
-    ->setName('dataset.view');
-
-$app->get('/dataset/form/add', ['\Xibo\Controller\DataSet','addForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['dataset.add']))
-    ->setName('dataSet.add.form');
-
 $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/dataset/form/edit/{id}', ['\Xibo\Controller\DataSet', 'editForm'])->setName('dataSet.edit.form');
-    $group->get('/dataset/form/copy/{id}', ['\Xibo\Controller\DataSet', 'copyForm'])->setName('dataSet.copy.form');
-    $group->get('/dataset/form/delete/{id}', ['\Xibo\Controller\DataSet', 'deleteForm'])->setName('dataSet.delete.form');
-    $group->get('/dataset/form/import/{id}', ['\Xibo\Controller\DataSet', 'importForm'])->setName('dataSet.import.form');
-    $group->get('/dataset/form/cache/clear/{id}', ['\Xibo\Controller\DataSet', 'clearCacheForm'])->setName('dataSet.clear.cache.form');
     $group->post('/dataset/cache/clear/{id}', ['\Xibo\Controller\DataSet', 'clearCache'])->setName('dataSet.clear.cache');
-    $group->get('/dataset/form/{id}/selectfolder', ['\Xibo\Controller\DataSet', 'selectFolderForm'])->setName('dataSet.selectfolder.form');
 
+    // Data connector
     $group->get('/dataset/dataConnector/{id}', ['\Xibo\Controller\DataSet', 'dataConnectorView'])->setName('dataSet.dataConnector.view');
     $group->get('/dataset/dataConnector/test/{id}', ['\Xibo\Controller\DataSet', 'dataConnectorTest'])->setName('dataSet.dataConnector.test');
-
-    // columns
-    $group->get('/dataset/{id}/column/view', ['\Xibo\Controller\DataSetColumn','displayPage'])->setName('dataSet.column.view');
-    $group->get('/dataset/{id}/column/form/add', ['\Xibo\Controller\DataSetColumn','addForm'])->setName('dataSet.column.add.form');
-    $group->get('/dataset/{id}/column/form/edit/{colId}', ['\Xibo\Controller\DataSetColumn','editForm'])->setName('dataSet.column.edit.form');
-    $group->get('/dataset/{id}/column/form/delete/{colId}', ['\Xibo\Controller\DataSetColumn','deleteForm'])->setName('dataSet.column.delete.form');
-
-    // RSS
-    $group->get('/dataset/{id}/rss/view', ['\Xibo\Controller\DataSetRss','displayPage'])->setName('dataSet.rss.view');
-    $group->get('/dataset/{id}/rss/form/add', ['\Xibo\Controller\DataSetRss','addForm'])->setName('dataSet.rss.add.form');
-    $group->get('/dataset/{id}/rss/form/edit/{rssId}', ['\Xibo\Controller\DataSetRss','editForm'])->setName('dataSet.rss.edit.form');
-    $group->get('/dataset/{id}/rss/form/delete/{rssId}', ['\Xibo\Controller\DataSetRss','deleteForm'])->setName('dataSet.rss.delete.form');
-
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['dataset.modify']));
-
-// data
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/dataset/data/view/{id}', ['\Xibo\Controller\DataSetData','displayPage'])->setName('dataSet.view.data');
-    $group->get('/dataset/data/form/add/{id}', ['\Xibo\Controller\DataSetData','addForm'])->setName('dataSet.data.add.form');
-    $group->get('/dataset/data/form/edit/{id}/{rowId}', ['\Xibo\Controller\DataSetData','editForm'])->setName('dataSet.data.edit.form');
-    $group->get('/dataset/data/form/delete/{id}/{rowId}', ['\Xibo\Controller\DataSetData','deleteForm'])->setName('dataSet.data.delete.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['dataset.data']));
-
-//
-// displaygroup
-//
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/displaygroup/view', ['\Xibo\Controller\DisplayGroup','displayPage'])->setName('displaygroup.view');
-    $group->get('/displaygroup/form/command/{id}', ['\Xibo\Controller\DisplayGroup','commandForm'])->setName('displayGroup.command.form');
-    $group->get('/displaygroup/form/collect/{id}', ['\Xibo\Controller\DisplayGroup','collectNowForm'])->setName('displayGroup.collectNow.form');
-    $group->get('/displaygroup/form/trigger/webhook/{id}', ['\Xibo\Controller\DisplayGroup','triggerWebhookForm'])->setName('displayGroup.trigger.webhook.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['displaygroup.view']));
-
-$app->get('/displaygroup/form/add', ['\Xibo\Controller\DisplayGroup','addForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['displaygroup.add']))
-    ->setName('displayGroup.add.form');
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/displaygroup/form/edit/{id}', ['\Xibo\Controller\DisplayGroup','editForm'])->setName('displayGroup.edit.form');
-    $group->get('/displaygroup/form/delete/{id}', ['\Xibo\Controller\DisplayGroup','deleteForm'])->setName('displayGroup.delete.form');
-    $group->get('/displaygroup/form/members/{id}', ['\Xibo\Controller\DisplayGroup','membersForm'])->setName('displayGroup.members.form');
-    $group->get('/displaygroup/form/media/{id}', ['\Xibo\Controller\DisplayGroup','mediaForm'])->setName('displayGroup.media.form');
-    $group->get('/displaygroup/form/layout/{id}', ['\Xibo\Controller\DisplayGroup','layoutsForm'])->setName('displayGroup.layout.form');
-    $group->get('/displaygroup/form/copy/{id}', ['\Xibo\Controller\DisplayGroup','copyForm'])->setName('displayGroup.copy.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['displaygroup.modify']));
-
-$app->get('/displaygroup/form/{id}/selectfolder', ['\Xibo\Controller\DisplayGroup','selectFolderForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['displaygroup.modify', 'display.modify']))
-    ->setName('displayGroup.selectfolder.form');
-
-//
-// displayprofile
-//
-$app->get('/displayprofile/view', ['\Xibo\Controller\DisplayProfile','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['displayprofile.view']))
-    ->setName('displayprofile.view');
-
-$app->get('/displayprofile/form/add', ['\Xibo\Controller\DisplayProfile','addForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['displayprofile.add']))
-    ->setName('displayProfile.add.form');
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/displayprofile/form/edit/{id}', ['\Xibo\Controller\DisplayProfile','editForm'])->setName('displayProfile.edit.form');
-    $group->get('/displayprofile/form/delete/{id}', ['\Xibo\Controller\DisplayProfile','deleteForm'])->setName('displayProfile.delete.form');
-    $group->get('/displayprofile/form/copy/{id}', ['\Xibo\Controller\DisplayProfile','copyForm'])->setName('displayProfile.copy.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['displayprofile.modify']));
 
 //
 // group
@@ -575,6 +338,9 @@ $app->group('', function (\Slim\Routing\RouteCollectorProxy $group) {
         ->setName('module.settings.form');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['module.view']));
 
+$app->get('/module/asset/{assetId}', ['\Xibo\Controller\Module', 'assetDownload'])
+    ->setName('module.asset.download');
+
 //
 // Developer
 //
@@ -624,14 +390,6 @@ $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['transition.view']));
 
 //
-// sessions
-//
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/sessions/view', ['\Xibo\Controller\Sessions','displayPage'])->setName('sessions.view');
-    $group->get('/sessions/form/logout/{id}', ['\Xibo\Controller\Sessions','confirmLogoutForm'])->setName('sessions.confirm.logout.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['session.view']));
-
-//
 // fault
 //
 $app->get('/fault/view', ['\Xibo\Controller\Fault','displayPage'])
@@ -677,22 +435,6 @@ $app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
     $group->get('/command/form/edit/{id}', ['\Xibo\Controller\Command','editForm'])->setName('command.edit.form');
     $group->get('/command/form/delete/{id}', ['\Xibo\Controller\Command','deleteForm'])->setName('command.delete.form');
 })->addMiddleware(new FeatureAuth($app->getContainer(), ['command.view']));
-
-//
-// Daypart
-//
-$app->get('/daypart/view', ['\Xibo\Controller\DayPart','displayPage'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['daypart.view']))
-    ->setName('daypart.view');
-
-$app->get('/daypart/form/add', ['\Xibo\Controller\DayPart','addForm'])
-    ->addMiddleware(new FeatureAuth($app->getContainer(), ['daypart.add']))
-    ->setName('daypart.add.form');
-
-$app->group('', function(\Slim\Routing\RouteCollectorProxy $group) {
-    $group->get('/daypart/form/edit/{id}', ['\Xibo\Controller\DayPart','editForm'])->setName('daypart.edit.form');
-    $group->get('/daypart/form/delete/{id}', ['\Xibo\Controller\DayPart','deleteForm'])->setName('daypart.delete.form');
-})->addMiddleware(new FeatureAuth($app->getContainer(), ['daypart.modify']));
 
 //
 // Tasks

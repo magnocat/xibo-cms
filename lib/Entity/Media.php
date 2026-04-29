@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2025 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -23,6 +23,7 @@ namespace Xibo\Entity;
 
 use Carbon\Carbon;
 use Mimey\MimeTypes;
+use OpenApi\Attributes as OA;
 use Respect\Validation\Validator as v;
 use Xibo\Factory\MediaFactory;
 use Xibo\Factory\PermissionFactory;
@@ -39,177 +40,168 @@ use Xibo\Support\Exception\NotFoundException;
 /**
  * Class Media
  * @package Xibo\Entity
- *
- * @SWG\Definition()
  */
+#[OA\Schema]
 class Media implements \JsonSerializable
 {
     use EntityTrait;
     use TagLinkTrait;
 
     /**
-     * @SWG\Property(description="The Media ID")
      * @var int
      */
+    #[OA\Property(description: 'The Media ID')]
     public $mediaId;
 
     /**
-     * @SWG\Property(description="The ID of the User that owns this Media")
      * @var int
      */
+    #[OA\Property(description: 'The ID of the User that owns this Media')]
     public $ownerId;
 
     /**
-     * @SWG\Property(description="The Parent ID of this Media if it has been revised")
      * @var int
      */
+    #[OA\Property(description: 'The Parent ID of this Media if it has been revised')]
     public $parentId;
 
     /**
-     * @SWG\Property(description="The Name of this Media")
      * @var string
      */
+    #[OA\Property(description: 'The Name of this Media')]
     public $name;
 
     /**
-     * @SWG\Property(description="The module type of this Media")
      * @var string
      */
+    #[OA\Property(description: 'The module type of this Media')]
     public $mediaType;
 
     /**
-     * @SWG\Property(description="The file name of the media as stored in the library")
      * @var string
      */
+    #[OA\Property(description: 'The file name of the media as stored in the library')]
     public $storedAs;
 
     /**
-     * @SWG\Property(description="The original file name as it was uploaded")
      * @var string
      */
+    #[OA\Property(description: 'The original file name as it was uploaded')]
     public $fileName;
 
     // Thing that might be referred to
     /**
-     * @SWG\Property(description="Tags associated with this Media, array of TagLink objects")
      * @var TagLink[]
      */
+    #[OA\Property(description: 'Tags associated with this Media, array of TagLink objects')]
     public $tags = [];
 
     /**
-     * @SWG\Property(description="The file size in bytes")
      * @var int
      */
+    #[OA\Property(description: 'The file size in bytes')]
     public $fileSize;
 
     /**
-     * @SWG\Property(description="The duration to use when assigning this media to a Layout widget")
      * @var int
      */
+    #[OA\Property(description: 'The duration to use when assigning this media to a Layout widget')]
     public $duration = 0;
 
     /**
-     * @SWG\Property(description="Flag indicating whether this media is valid.")
      * @var int
      */
+    #[OA\Property(description: 'Flag indicating whether this media is valid.')]
     public $valid = 0;
 
     /**
-     * @SWG\Property(description="DEPRECATED: Flag indicating whether this media is a system file or not")
      * @var int
      */
+    #[OA\Property(description: 'DEPRECATED: Flag indicating whether this media is a system file or not')]
     public $moduleSystemFile = 0;
 
     /**
-     * @SWG\Property(description="Timestamp indicating when this media should expire")
      * @var int
      */
+    #[OA\Property(description: 'Timestamp indicating when this media should expire')]
     public $expires = 0;
 
     /**
-     * @SWG\Property(description="Flag indicating whether this media is retired")
      * @var int
      */
+    #[OA\Property(description: 'Flag indicating whether this media is retired')]
     public $retired = 0;
 
     /**
-     * @SWG\Property(description="Flag indicating whether this media has been edited and replaced with a newer file")
      * @var int
      */
+    #[OA\Property(description: 'Flag indicating whether this media has been edited and replaced with a newer file')]
     public $isEdited = 0;
 
     /**
-     * @SWG\Property(description="A MD5 checksum of the stored media file")
      * @var string
      */
+    #[OA\Property(description: 'A MD5 checksum of the stored media file')]
     public $md5;
 
     /**
-     * @SWG\Property(description="The username of the User that owns this media")
      * @var string
      */
+    #[OA\Property(description: 'The username of the User that owns this media')]
     public $owner;
 
     /**
-     * @SWG\Property(description="A comma separated list of groups/users with permissions to this Media")
      * @var string
      */
+    #[OA\Property(description: 'A comma separated list of groups/users with permissions to this Media')]
     public $groupsWithPermissions;
 
     /**
-     * @SWG\Property(description="A flag indicating whether this media has been released")
      * @var int
      */
+    #[OA\Property(description: 'A flag indicating whether this media has been released')]
     public $released = 1;
 
     /**
-     * @SWG\Property(description="An API reference")
      * @var string
      */
+    #[OA\Property(description: 'An API reference')]
     public $apiRef;
 
     /**
      * @var string
-     * @SWG\Property(
-     *  description="The datetime the Media was created"
-     * )
      */
+    #[OA\Property(description: 'The datetime the Media was created')]
     public $createdDt;
 
     /**
      * @var string
-     * @SWG\Property(
-     *  description="The datetime the Media was last modified"
-     * )
      */
+    #[OA\Property(description: 'The datetime the Media was last modified')]
     public $modifiedDt;
 
     /**
      * @var string
-     * @SWG\Property(
-     *  description="The option to enable the collection of Media Proof of Play statistics"
-     * )
      */
+    #[OA\Property(description: 'The option to enable the collection of Media Proof of Play statistics')]
     public $enableStat;
 
     /**
      * @var string
-     * @SWG\Property(
-     *  description="The orientation of the Media file"
-     * )
      */
+    #[OA\Property(description: 'The orientation of the Media file')]
     public $orientation;
 
     /**
      * @var int
-     * @SWG\Property(description="The width of the Media file")
      */
+    #[OA\Property(description: 'The width of the Media file')]
     public $width;
 
     /**
      * @var int
-     * @SWG\Property(description="The height of the Media file")
      */
+    #[OA\Property(description: 'The height of the Media file')]
     public $height;
 
     // Private
@@ -228,15 +220,15 @@ class Media implements \JsonSerializable
     public $alwaysCopy = false;
 
     /**
-     * @SWG\Property(description="The id of the Folder this Media belongs to")
      * @var int
      */
+    #[OA\Property(description: "The id of the Folder this Media belongs to")]
     public $folderId;
 
     /**
-     * @SWG\Property(description="The id of the Folder responsible for providing permissions for this Media")
      * @var int
      */
+    #[OA\Property(description: "The id of the Folder responsible for providing permissions for this Media")]
     public $permissionsFolderId;
 
     public $widgets = [];
@@ -404,6 +396,8 @@ class Media implements \JsonSerializable
             // If the media is imported from a provider (ie Pixabay, etc), use it instead of importing again.
             if (isset($this->apiRef) && $this->apiRef === $result[0]['apiRef']) {
                 $this->mediaId = intval($result[0]['mediaId']);
+            } else if ($options['isMediaReassigned']) {
+                $this->name = $this->getReassignedMediaName($result[0]['name']);
             } else {
                 throw new DuplicateEntityException(__('Media you own already has this name. Please choose another.'));
             }
@@ -456,6 +450,7 @@ class Media implements \JsonSerializable
             'deferred' => false,
             'saveTags' => true,
             'audit' => true,
+            'isMediaReassigned' => false
         ], $options);
 
         if ($options['validate'] && $this->mediaType !== 'module') {
@@ -486,7 +481,12 @@ class Media implements \JsonSerializable
             $this->isSaveRequired = $this->isSaveRequired
                 || $this->valid == 0
                 || ($expires > 0 && $expires < Carbon::now()->format('U'))
-                || ($this->mediaType === 'module' && !file_exists($this->downloadSink(false)));
+                || ($this->mediaType === 'module' && (
+                    // Save is required if the file doesn't exist, and also if it exists but isn't the size
+                    // we have recorded for it in the database
+                    !file_exists($this->downloadSink(false))
+                    || ($this->fileSize > 0 && filesize($this->downloadSink(false)) !== $this->fileSize)
+                ));
 
             if ($options['audit']) {
                 $this->audit($this->mediaId, 'Updated', $this->getChangedProperties());
@@ -1036,5 +1036,58 @@ class Media implements \JsonSerializable
         ]);
 
         return $this;
+    }
+
+    /**
+     * Get the reassigned media name
+     * @param $media
+     * @return string
+     */
+    private function getReassignedMediaName($media): string
+    {
+        // Append a numeric suffix if the target user already has a media item with this name
+        // However, we first need to check similar names to ensure that there's no conflict in renaming the media.
+
+        // Separate the base and file extension
+        $separator = strrpos($media, '.');
+
+        [$base, $ext] = $separator
+            ? [substr($media, 0, $separator), substr($media, $separator)]
+            : [$media, ''];
+
+        // Get all similar names
+        $params = [];
+        $checkSQL = 'SELECT `name` FROM `media` WHERE `name` LIKE :name AND userid = :userId';
+
+        $params['name'] = $base . '%';
+        $params['userId'] = $this->ownerId;
+
+        $entries = $this->getStore()->select($checkSQL, $params);
+
+        $count = [];
+
+        foreach ($entries as $entry) {
+            $name = $entry['name'];
+
+            if ($name === $base . $ext) {
+                $count[] = 0;
+                continue;
+            }
+
+            // Check for numeric suffix like (1), (2), etc. to get the correct subsequent suffix
+            $suffix = trim(substr($name, strlen($base), strlen($name) - strlen($base) - strlen($ext)));
+
+            if (strlen($suffix) > 2 && $suffix[0] === '(' && $suffix[-1] === ')') {
+                $count[] = (int) substr($suffix, 1, -1);
+            }
+        }
+
+        $i = 0;
+
+        while (in_array($i, $count, true)) {
+            $i++;
+        }
+
+        return $base . ($i > 0 ? " ($i)" : '') . $ext;
     }
 }

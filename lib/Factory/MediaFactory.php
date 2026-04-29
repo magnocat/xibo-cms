@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2024 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -23,7 +23,6 @@
 
 namespace Xibo\Factory;
 
-use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Pool;
 use Psr\Http\Message\ResponseInterface;
@@ -31,6 +30,7 @@ use Xibo\Entity\Media;
 use Xibo\Entity\User;
 use Xibo\Helper\ByteFormatter;
 use Xibo\Helper\Environment;
+use Xibo\Helper\Guzzle\SafeClient;
 use Xibo\Service\ConfigServiceInterface;
 use Xibo\Support\Exception\NotFoundException;
 
@@ -163,7 +163,7 @@ class MediaFactory extends BaseFactory
      * @throws \Xibo\Support\Exception\GeneralException
      * @throws \Xibo\Support\Exception\InvalidArgumentException
      */
-    public function queueDownload($name, $uri, $expiry, $requestOptions = [])
+    public function queueDownload($name, $uri, $expiry, $requestOptions = []): Media
     {
         // Determine the save name
         if (!isset($requestOptions['fileType'])) {
@@ -243,19 +243,22 @@ class MediaFactory extends BaseFactory
 
     /**
      * Process the queue of downloads
-     * @param null|callable $success success callable
-     * @param null|callable $failure failure callable
-     * @param null|callable $rejected rejected callable
+     * @param callable|null $success success callable
+     * @param callable|null $failure failure callable
+     * @param callable|null $rejected rejected callable
      */
-    public function processDownloads($success = null, $failure = null, $rejected = null)
-    {
+    public function processDownloads(
+        ?callable $success = null,
+        ?callable $failure = null,
+        ?callable $rejected = null
+    ): void {
         if (count($this->remoteDownloadQueue) > 0) {
             $this->getLog()->debug('Processing Queue of ' . count($this->remoteDownloadQueue) . ' downloads.');
 
             // Create a generator and Pool
             $log = $this->getLog();
             $queue = $this->remoteDownloadQueue;
-            $client = new Client($this->config->getGuzzleProxy(['timeout' => 0]));
+            $client = SafeClient::getSafeClient($this->config->getGuzzleProxy(['timeout' => 0]));
 
             $downloads = function () use ($client, $queue) {
                 foreach ($queue as $media) {
@@ -271,15 +274,32 @@ class MediaFactory extends BaseFactory
                                 $this->getLog()->debug('processDownloads: successful, headers = '
                                     . var_export($response->getHeaders(), true));
 
-                                // Get the content length
+                                // Get the content length to reject downloads bigger than we can accept
+                                // (before downloading anything other than headers)
+                                // Only reject if Content-Length is present AND exceeds the limit.
+                                // Servers using chunked transfer encoding omit Content-Length entirely;
+                                // treating an absent header as "too large" wrongly rejects valid images.
                                 $contentLength = $response->getHeaderLine('Content-Length');
-                                if (empty($contentLength)
-                                    || intval($contentLength) > ByteFormatter::toBytes(Environment::getMaxUploadSize())
+                                if (!empty($contentLength)
+                                    && intval($contentLength) > ByteFormatter::toBytes(Environment::getMaxUploadSize())
                                 ) {
                                     throw new \Exception(__('File too large'));
                                 }
                             }
-                        }
+                        },
+                        'progress' => function (
+                            int $downloadTotal,
+                            int $downloadedBytes,
+                            int $uploadTotal,
+                            int $uploadedBytes
+                        ) {
+                            // Abort the transfer mid-stream if the download grows beyond the
+                            // max upload size. This handles servers that omit Content-Length
+                            // (e.g. chunked transfer encoding) where on_headers cannot reject early.
+                            if ($downloadedBytes > ByteFormatter::toBytes(Environment::getMaxUploadSize())) {
+                                throw new \Exception(__('File too large'));
+                            }
+                        },
                     ]);
 
                     yield function () use ($client, $url, $requestOptions) {
@@ -316,11 +336,14 @@ class MediaFactory extends BaseFactory
                 },
                 'rejected' => function ($reason, $index) use ($log, $queue, $rejected) {
                     /* @var RequestException $reason */
+                    $uri = ($reason instanceof \GuzzleHttp\Exception\RequestException)
+                        ? $reason->getRequest()->getUri()
+                        : 'unknown';
                     $log->error(
                         sprintf(
                             'Rejected Request %d to %s because %s',
                             $index,
-                            $reason->getRequest()->getUri(),
+                            $uri,
                             $reason->getMessage()
                         )
                     );
@@ -346,7 +369,8 @@ class MediaFactory extends BaseFactory
 
         // Handle the downloads that did not require downloading
         if (count($this->remoteDownloadNotRequiredQueue) > 0) {
-            $this->getLog()->debug('Processing Queue of ' . count($this->remoteDownloadNotRequiredQueue) . ' items which do not need downloading.');
+            $this->getLog()->debug('Processing Queue of ' . count($this->remoteDownloadNotRequiredQueue)
+                . ' items which do not need downloading.');
 
             foreach ($this->remoteDownloadNotRequiredQueue as $item) {
                 // If a success callback has been provided, call it
@@ -517,28 +541,27 @@ class MediaFactory extends BaseFactory
     public function query($sortOrder = null, $filterBy = [])
     {
         $sanitizedFilter = $this->getSanitizer($filterBy);
+        $allowedColumns = [
+            'mediaId', 'name', 'type', 'duration', 'fileSize', 'owner', 'sharing', 'released', 'fileName',
+            'enableStat', 'createdDt', 'modifiedDt', 'expires'
+        ];
+        $customColumns = [
+            'revised'           => '`parentId`',
+            'formattedDuration' => '`duration`',
+            'durationSeconds'   => '`duration`',
+            'fileSizeFormatted' => '`fileSize`',
+            'mediaType'         => 'media.`type`',
+            'resolution'        => '(media.`width` * media.`height`)'
+        ];
 
-        if ($sortOrder === null) {
-            $sortOrder = ['name'];
-        }
-
-        $newSortOrder = [];
-        foreach ($sortOrder as $sort) {
-            if ($sort == '`revised`') {
-                $newSortOrder[] = '`parentId`';
-                continue;
-            }
-
-            if ($sort == '`revised` DESC') {
-                $newSortOrder[] = '`parentId` DESC';
-                continue;
-            }
-            $newSortOrder[] = $sort;
-        }
-        $sortOrder = $newSortOrder;
+        $sortOrder = $this->buildSortQuery(
+            $sortOrder,
+            $allowedColumns,
+            $customColumns,
+            ['name ASC']
+        );
 
         $entries = [];
-
         $params = [];
         $select = '
             SELECT `media`.mediaId,
@@ -566,6 +589,8 @@ class MediaFactory extends BaseFactory
                `media`.width,
                `media`.height,
                `user`.UserName AS owner,
+               `user`.email AS userEmail,
+               `folder`.folderName,
             ';
         $select .= '     (SELECT GROUP_CONCAT(DISTINCT `group`.group)
                               FROM `permission`
@@ -587,6 +612,8 @@ class MediaFactory extends BaseFactory
 
         // Media might be linked to the system user (userId 0)
         $body .= '   LEFT OUTER JOIN `user` ON `user`.userId = `media`.userId ';
+
+        $body .= '   LEFT OUTER JOIN `folder` ON `folder`.folderId = `media`.folderId ';
 
         if ($sanitizedFilter->getInt('displayGroupId') !== null) {
             $body .= '
@@ -678,6 +705,16 @@ class MediaFactory extends BaseFactory
             $body .= '
                 AND `media`.`mediaId` NOT IN (SELECT `mediaId` FROM `display_media`)
             ';
+        }
+
+        if ($sanitizedFilter->getString('keyword') != null) {
+            // Fulltext search
+            $body .= $this->buildSearchQuery(
+                $sanitizedFilter->getString('keyword'),
+                $params,
+                ['media.name', 'media.originalFileName', 'media.storedAs'],
+                ['media.mediaId']
+            );
         }
 
         if ($sanitizedFilter->getString('name') != null) {
@@ -928,6 +965,17 @@ class MediaFactory extends BaseFactory
             $params['duration'] = $duration['variable'];
         }
 
+        // Modified Date filter
+        if ($sanitizedFilter->getDate('modifiedDateFrom') !== null) {
+            $body .= ' AND media.modifiedDt >= :modifiedDateFrom ';
+            $params['modifiedDateFrom'] = $sanitizedFilter->getDate('modifiedDateFrom');
+        }
+
+        if ($sanitizedFilter->getDate('modifiedDateTo') !== null) {
+            $body .= ' AND media.modifiedDt <= :modifiedDateTo ';
+            $params['modifiedDateTo'] = $sanitizedFilter->getDate('modifiedDateTo');
+        }
+
         if ($sanitizedFilter->getInt('folderId') !== null) {
             $body .= ' AND media.folderId = :folderId ';
             $params['folderId'] = $sanitizedFilter->getInt('folderId');
@@ -958,11 +1006,8 @@ class MediaFactory extends BaseFactory
         );
 
         // Sorting?
-        $order = '';
-        if (is_array($sortOrder)) {
-            $order .= ' ORDER BY ' . implode(',', $sortOrder);
-        }
-
+        $order = !empty($sortOrder) ? ' ORDER BY ' . implode(', ', $sortOrder) : '';
+        
         $limit = '';
         // Paging
         if ($sanitizedFilter->hasParam('start') && $sanitizedFilter->hasParam('length')) {

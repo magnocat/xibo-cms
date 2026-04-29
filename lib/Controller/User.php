@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2025 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -21,6 +21,7 @@
  */
 namespace Xibo\Controller;
 
+use OpenApi\Attributes as OA;
 use RobThree\Auth\TwoFactorAuth;
 use Slim\Http\Response as Response;
 use Slim\Http\ServerRequest as Request;
@@ -36,8 +37,10 @@ use Xibo\Factory\UserFactory;
 use Xibo\Factory\UserGroupFactory;
 use Xibo\Factory\UserTypeFactory;
 use Xibo\Helper\ByteFormatter;
+use Xibo\Helper\DateFormatHelper;
 use Xibo\Helper\QuickChartQRProvider;
 use Xibo\Helper\Random;
+use Xibo\Helper\Translate;
 use Xibo\Service\MediaService;
 use Xibo\Support\Exception\AccessDeniedException;
 use Xibo\Support\Exception\ConfigurationException;
@@ -187,84 +190,111 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/user/me',
+        operationId: 'userMe',
+        description: 'Get my details',
+        summary: 'Get Me',
+        tags: ['user']
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/User')
+    )]
     /**
      * Me
      *
-     * @SWG\Get(
-     *  path="/user/me",
-     *  operationId="userMe",
-     *  tags={"user"},
-     *  summary="Get Me",
-     *  description="Get my details",
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/User")
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws GeneralException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
+     * @throws \Xibo\Support\Exception\GeneralException
      */
     public function myDetails(Request $request, Response $response)
     {
-        // Return
-        $this->getState()->hydrate([
-            'httpStatus' => 200,
-            'data' => $this->getUser()
-        ]);
+        $settings = $this->getConfig()->getSettings();
 
-        return $this->render($request, $response);
+        // Date format
+        $settings['DATE_FORMAT_JS'] = DateFormatHelper::convertPhpToMomentFormat($settings['DATE_FORMAT']);
+        $settings['DATE_FORMAT_JALALI_JS'] = DateFormatHelper::convertMomentToJalaliFormat($settings['DATE_FORMAT_JS']);
+        $settings['TIME_FORMAT'] = DateFormatHelper::extractTimeFormat($settings['DATE_FORMAT']);
+        $settings['TIME_FORMAT_JS'] = DateFormatHelper::convertPhpToMomentFormat($settings['TIME_FORMAT']);
+        $settings['DATE_ONLY_FORMAT'] = DateFormatHelper::extractDateOnlyFormat($settings['DATE_FORMAT']);
+        $settings['DATE_ONLY_FORMAT_JS'] = DateFormatHelper::convertPhpToMomentFormat($settings['DATE_ONLY_FORMAT']);
+        $settings['DATE_ONLY_FORMAT_JALALI_JS'] = DateFormatHelper::convertMomentToJalaliFormat(
+            $settings['DATE_ONLY_FORMAT_JS']
+        );
+        $settings['systemDateFormat'] = DateFormatHelper::convertPhpToMomentFormat(DateFormatHelper::getSystemFormat());
+        $settings['systemTimeFormat'] = DateFormatHelper::convertPhpToMomentFormat(
+            DateFormatHelper::extractTimeFormat(DateFormatHelper::getSystemFormat())
+        );
+
+        $settings['translate'] = [
+            'locale' => Translate::GetLocale(),
+            'jsLocale' => Translate::getRequestedJsLocale(),
+            'jsShortLocale' => Translate::getRequestedJsLocale(['short' => true])
+        ];
+        $settings['accountId'] = defined('ACCOUNT_ID') ? constant('ACCOUNT_ID') : null;
+
+        $homePageUrl = $this->urlFor(
+            $request,
+            $this->userGroupFactory->getHomepageByName($this->getUser()->homePageId)->homepage
+        );
+
+        // TODO: output some settings
+        return $response->withJson(array_merge($this->getUser()->toArray(), [
+            'homePageUrl' => $homePageUrl,
+            'settings' => $settings,
+            'features' => $this->getUserFeatures()
+        ]));
     }
 
+    #[OA\Get(
+        path: '/user',
+        operationId: 'userSearch',
+        description: 'Search users',
+        summary: 'User Search',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'userId',
+        description: 'Filter by User Id',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'userName',
+        description: 'Filter by User Name',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'userTypeId',
+        description: 'Filter by UserType Id',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'retired',
+        description: 'Filter by Retired',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(
+            type: 'array',
+            items: new OA\Items(ref: '#/components/schemas/User')
+        )
+    )]
     /**
      * Prints the user information in a table based on a check box selection
      *
-     * @SWG\Get(
-     *  path="/user",
-     *  operationId="userSearch",
-     *  tags={"user"},
-     *  summary="User Search",
-     *  description="Search users",
-     *  @SWG\Parameter(
-     *      name="userId",
-     *      in="query",
-     *      description="Filter by User Id",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="userName",
-     *      in="query",
-     *      description="Filter by User Name",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="userTypeId",
-     *      in="query",
-     *      description="Filter by UserType Id",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="retired",
-     *      in="query",
-     *      description="Filter by Retired",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/User")
-     *      )
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -275,124 +305,14 @@ class User extends Base
     {
         $sanitizedParams = $this->getSanitizer($request->getQueryParams());
 
-        // Filter our users?
-        $filterBy = [
-            'userId' => $sanitizedParams->getInt('userId'),
-            'userTypeId' => $sanitizedParams->getInt('userTypeId'),
-            'userName' => $sanitizedParams->getString('userName'),
-            'firstName' => $sanitizedParams->getString('firstName'),
-            'lastName' => $sanitizedParams->getString('lastName'),
-            'useRegexForName' => $sanitizedParams->getCheckbox('useRegexForName'),
-            'retired' => $sanitizedParams->getInt('retired'),
-            'logicalOperatorName' => $sanitizedParams->getString('logicalOperatorName'),
-            'userGroupIdMembers' => $sanitizedParams->getInt('userGroupIdMembers'),
-        ];
-
         // Load results into an array
-        $users = $this->userFactory->query($this->gridRenderSort($sanitizedParams), $this->gridRenderFilter($filterBy, $sanitizedParams));
+        $users = $this->userFactory->query(
+            $this->gridRenderSort($sanitizedParams),
+            $this->getUserFilters($sanitizedParams)
+        );
 
         foreach ($users as $user) {
-            /* @var \Xibo\Entity\User $user */
-
-            $user->setUnmatchedProperty('libraryQuotaFormatted', ByteFormatter::format($user->libraryQuota * 1024));
-
-            $user->loggedIn = $this->sessionFactory->getActiveSessionsForUser($user->userId);
-            $this->getLog()->debug('Logged in status for user ID ' . $user->userId . ' with name ' . $user->userName . ' is ' . $user->loggedIn);
-
-            // Set some text for the display status
-            $user->setUnmatchedProperty('twoFactorDescription', match ($user->twoFactorTypeId) {
-                1 => __('Email'),
-                2 => __('Google Authenticator'),
-                default => __('Disabled'),
-            });
-
-            if ($this->isApi($request)) {
-                continue;
-            }
-
-            $user->includeProperty('buttons');
-
-            // Deal with the home page
-            try {
-                $user->setUnmatchedProperty(
-                    'homePage',
-                    $this->userGroupFactory->getHomepageByName($user->homePageId)->title
-                );
-            } catch (NotFoundException $exception) {
-                $this->getLog()->error('User has homepage which does not exist. userId: ' . $user->userId . ', homepage: ' . $user->homePageId);
-                $user->setUnmatchedProperty('homePage', __('Unknown homepage, please edit to update.'));
-            }
-
-            // Set the home folder
-            $user->setUnmatchedProperty('homeFolder', $user->getUnmatchedProperty('homeFolder', '/'));
-
-            // Super admins have some buttons
-            if ($this->getUser()->featureEnabled('users.modify')
-                && $this->getUser()->checkEditable($user)
-            ) {
-                // Edit
-                $user->buttons[] = [
-                    'id' => 'user_button_edit',
-                    'url' => $this->urlFor($request,'user.edit.form', ['id' => $user->userId]),
-                    'text' => __('Edit')
-                ];
-            }
-
-            if ($this->getUser()->featureEnabled('users.modify')
-                && $this->getUser()->checkDeleteable($user)
-                && $user->userId != $this->getConfig()->getSetting('SYSTEM_USER')
-                && $this->getUser()->userId !== $user->userId
-                && ( ($this->getUser()->isGroupAdmin() && $user->userTypeId == 3) || $this->getUser()->isSuperAdmin() )
-            ) {
-                // Delete
-                $user->buttons[] = [
-                    'id' => 'user_button_delete',
-                    'url' => $this->urlFor($request,'user.delete.form', ['id' => $user->userId]),
-                    'text' => __('Delete')
-                ];
-            }
-
-            if ($this->getUser()->featureEnabled('folder.userHome')) {
-                $user->buttons[] = [
-                    'id' => 'user_button_set_home',
-                    'url' => $this->urlFor($request, 'user.homeFolder.form', ['id' => $user->userId]),
-                    'text' => __('Set Home Folder'),
-                    'multi-select' => true,
-                    'dataAttributes' => [
-                        ['name' => 'commit-url', 'value' => $this->urlFor($request, 'user.homeFolder', ['id' => $user->userId])],
-                        ['name' => 'commit-method', 'value' => 'post'],
-                        ['name' => 'id', 'value' => 'user_button_set_home'],
-                        ['name' => 'text', 'value' => __('Set home folder')],
-                        ['name' => 'rowtitle', 'value' => $user->userName],
-                        ['name' => 'form-callback', 'value' => 'userHomeFolderMultiselectFormOpen']
-                    ],
-                ];
-            }
-
-            if ($this->getUser()->featureEnabled('users.modify')
-                && $this->getUser()->checkPermissionsModifyable($user)
-            ) {
-                $user->buttons[] = ['divider' => true];
-
-                // User Groups
-                $user->buttons[] = array(
-                    'id' => 'user_button_group_membership',
-                    'url' => $this->urlFor($request,'user.membership.form', ['id' => $user->userId]),
-                    'text' => __('User Groups')
-                );
-            }
-
-            if ($this->getUser()->isSuperAdmin()) {
-                $user->buttons[] = ['divider' => true];
-
-                // Features
-                $user->buttons[] = [
-                    'id' => 'user_button_page_security',
-                    'url' => $this->urlFor($request,'group.acl.form', ['id' => $user->groupId, 'userId' => $user->userId]),
-                    'text' => __('Features'),
-                    'title' => __('Turn Features on/off for this User')
-                ];
-            }
+            $this->decorateUserProperties($request, $user);
         }
 
         $this->getState()->template = 'grid';
@@ -402,153 +322,95 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Post(
+        path: '/user',
+        operationId: 'userAdd',
+        description: 'Add a new User',
+        summary: 'Add User',
+        tags: ['user']
+    )]
+    #[OA\RequestBody(
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                properties: [
+                    new OA\Property(property: 'userName', description: 'The User Name', type: 'string'),
+                    new OA\Property(property: 'email', description: 'The user email address', type: 'string'),
+                    new OA\Property(property: 'userTypeId', description: 'The user type ID', type: 'integer'),
+                    new OA\Property(
+                        property: 'homePageId',
+                        description: 'The homepage to use for this User',
+                        enum: [
+                            'statusdashboard.view',
+                            'icondashboard.view',
+                            'mediamanager.view',
+                            'playlistdashboard.view'
+                        ],
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'libraryQuota',
+                        description: 'The users library quota in kilobytes',
+                        type: 'integer'
+                    ),
+                    new OA\Property(property: 'password', description: 'The users password', type: 'string'),
+                    new OA\Property(
+                        property: 'groupId',
+                        description: 'The inital user group for this User',
+                        type: 'integer'
+                    ),
+                    new OA\Property(property: 'firstName', description: 'The users first name', type: 'string'),
+                    new OA\Property(property: 'lastName', description: 'The users last name', type: 'string'),
+                    new OA\Property(property: 'phone', description: 'The users phone number', type: 'string'),
+                    new OA\Property(property: 'ref1', description: 'Reference 1', type: 'string'),
+                    new OA\Property(property: 'ref2', description: 'Reference 2', type: 'string'),
+                    new OA\Property(property: 'ref3', description: 'Reference 3', type: 'string'),
+                    new OA\Property(property: 'ref4', description: 'Reference 4', type: 'string'),
+                    new OA\Property(property: 'ref5', description: 'Reference 5', type: 'string'),
+                    new OA\Property(
+                        property: 'newUserWizard',
+                        description: 'Flag indicating whether to show the new user guide',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'hideNavigation',
+                        description: 'Flag indicating whether to hide the navigation',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'isPasswordChangeRequired',
+                        description: 'A flag indicating whether password change should be forced for this user', // phpcs:ignore
+                        type: 'integer'
+                    )
+                ],
+                required: [
+                    'userName',
+                    'userTypeId',
+                    'homePageId',
+                    'password',
+                    'groupId',
+                    'newUserWizard',
+                    'hideNavigation'
+                ]
+            )
+        ),
+        required: true
+    )]
+    #[OA\Response(
+        response: 201,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/User'),
+        headers: [
+            new OA\Header(
+                header: 'Location',
+                description: 'Location of the new record',
+                schema: new OA\Schema(type: 'string')
+            )
+        ]
+    )]
     /**
      * Adds a user
      *
-     * @SWG\Post(
-     *  path="/user",
-     *  operationId="userAdd",
-     *  tags={"user"},
-     *  summary="Add User",
-     *  description="Add a new User",
-     *  @SWG\Parameter(
-     *      name="userName",
-     *      in="formData",
-     *      description="The User Name",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="email",
-     *      in="formData",
-     *      description="The user email address",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="userTypeId",
-     *      in="formData",
-     *      description="The user type ID",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="homePageId",
-     *      in="formData",
-     *      description="The homepage to use for this User",
-     *      type="string",
-     *      enum={"statusdashboard.view", "icondashboard.view", "mediamanager.view", "playlistdashboard.view"},
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="libraryQuota",
-     *      in="formData",
-     *      description="The users library quota in kilobytes",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="password",
-     *      in="formData",
-     *      description="The users password",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="groupId",
-     *      in="formData",
-     *      description="The inital user group for this User",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="firstName",
-     *      in="formData",
-     *      description="The users first name",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="lastName",
-     *      in="formData",
-     *      description="The users last name",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="phone",
-     *      in="formData",
-     *      description="The users phone number",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref1",
-     *      in="formData",
-     *      description="Reference 1",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref2",
-     *      in="formData",
-     *      description="Reference 2",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref3",
-     *      in="formData",
-     *      description="Reference 3",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref4",
-     *      in="formData",
-     *      description="Reference 4",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref5",
-     *      in="formData",
-     *      description="Reference 5",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="newUserWizard",
-     *      in="formData",
-     *      description="Flag indicating whether to show the new user guide",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="hideNavigation",
-     *      in="formData",
-     *      description="Flag indicating whether to hide the navigation",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="isPasswordChangeRequired",
-     *      in="formData",
-     *      description="A flag indicating whether password change should be forced for this user",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/User"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new record",
-     *          type="string"
-     *      )
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -641,167 +503,95 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Put(
+        path: '/user/{userId}',
+        operationId: 'userEdit',
+        description: 'Edit existing User',
+        summary: 'Edit User',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'userId',
+        description: 'The user ID to edit',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                properties: [
+                    new OA\Property(property: 'userName', description: 'The User Name', type: 'string'),
+                    new OA\Property(property: 'email', description: 'The user email address', type: 'string'),
+                    new OA\Property(property: 'userTypeId', description: 'The user type ID', type: 'integer'),
+                    new OA\Property(
+                        property: 'homePageId',
+                        description: 'The homepage to use for this User',
+                        enum: [
+                            'statusdashboard.view',
+                            'icondashboard.view',
+                            'mediamanager.view',
+                            'playlistdashboard.view'
+                        ],
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'libraryQuota',
+                        description: 'The users library quota in kilobytes',
+                        type: 'integer'
+                    ),
+                    new OA\Property(property: 'newPassword', description: 'New User password', type: 'string'),
+                    new OA\Property(property: 'retypeNewPassword', description: 'Repeat the new User password', type: 'string'),
+                    new OA\Property(
+                        property: 'retired',
+                        description: 'Flag indicating whether to retire this user',
+                        type: 'integer'
+                    ),
+                    new OA\Property(property: 'firstName', description: 'The users first name', type: 'string'),
+                    new OA\Property(property: 'lastName', description: 'The users last name', type: 'string'),
+                    new OA\Property(property: 'phone', description: 'The users phone number', type: 'string'),
+                    new OA\Property(property: 'ref1', description: 'Reference 1', type: 'string'),
+                    new OA\Property(property: 'ref2', description: 'Reference 2', type: 'string'),
+                    new OA\Property(property: 'ref3', description: 'Reference 3', type: 'string'),
+                    new OA\Property(property: 'ref4', description: 'Reference 4', type: 'string'),
+                    new OA\Property(property: 'ref5', description: 'Reference 5', type: 'string'),
+                    new OA\Property(
+                        property: 'newUserWizard',
+                        description: 'Flag indicating whether to show the new user guide',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'hideNavigation',
+                        description: 'Flag indicating whether to hide the navigation',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'isPasswordChangeRequired',
+                        description: 'A flag indicating whether password change should be forced for this user', // phpcs:ignore
+                        type: 'integer'
+                    )
+                ],
+                required: ['userName', 'userTypeId', 'homePageId', 'newUserWizard', 'hideNavigation']
+            )
+        ),
+        required: true
+    )]
+    #[OA\Response(
+        response: 201,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/User'),
+        headers: [
+            new OA\Header(
+                header: 'Location',
+                description: 'Location of the new record',
+                schema: new OA\Schema(type: 'string')
+            )
+        ]
+    )]
     /**
      * Edit a user
      *
-     * @SWG\Put(
-     *  path="/user/{userId}",
-     *  operationId="userEdit",
-     *  tags={"user"},
-     *  summary="Edit User",
-     *  description="Edit existing User",
-     *  @SWG\Parameter(
-     *      name="userId",
-     *      in="path",
-     *      description="The user ID to edit",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="userName",
-     *      in="formData",
-     *      description="The User Name",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="email",
-     *      in="formData",
-     *      description="The user email address",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="userTypeId",
-     *      in="formData",
-     *      description="The user type ID",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="homePageId",
-     *      in="formData",
-     *      description="The homepage to use for this User",
-     *      type="string",
-     *      enum={"statusdashboard.view", "icondashboard.view", "mediamanager.view", "playlistdashboard.view"},
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="libraryQuota",
-     *      in="formData",
-     *      description="The users library quota in kilobytes",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="newPassword",
-     *      in="formData",
-     *      description="New User password",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="retypeNewPassword",
-     *      in="formData",
-     *      description="Repeat the new User password",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="retired",
-     *      in="formData",
-     *      description="Flag indicating whether to retire this user",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="firstName",
-     *      in="formData",
-     *      description="The users first name",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="lastName",
-     *      in="formData",
-     *      description="The users last name",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="phone",
-     *      in="formData",
-     *      description="The users phone number",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref1",
-     *      in="formData",
-     *      description="Reference 1",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref2",
-     *      in="formData",
-     *      description="Reference 2",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref3",
-     *      in="formData",
-     *      description="Reference 3",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref4",
-     *      in="formData",
-     *      description="Reference 4",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ref5",
-     *      in="formData",
-     *      description="Reference 5",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="newUserWizard",
-     *      in="formData",
-     *      description="Flag indicating whether to show the new user guide",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="hideNavigation",
-     *      in="formData",
-     *      description="Flag indicating whether to hide the navigation",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="isPasswordChangeRequired",
-     *      in="formData",
-     *      description="A flag indicating whether password change should be forced for this user",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/User"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new record",
-     *          type="string"
-     *      )
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -830,7 +620,7 @@ class User extends Base
         $user->userName = $sanitizedParams->getString('userName');
         $user->email = $sanitizedParams->getString('email');
         $user->homePageId = $sanitizedParams->getString('homePageId');
-        $user->libraryQuota = $sanitizedParams->getInt('libraryQuota');
+        $user->libraryQuota = $sanitizedParams->getInt('libraryQuota', ['default' => $user->libraryQuota]);
         $user->retired = $sanitizedParams->getCheckbox('retired');
 
         // Are user home folders enabled? Don't change unless they are.
@@ -934,45 +724,45 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Delete(
+        path: '/user/{userId}',
+        operationId: 'userDelete',
+        description: 'Delete user',
+        summary: 'User Delete',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'userId',
+        description: 'Id of the user to delete',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'deleteAllItems',
+        description: 'Flag indicating whether to delete all items owned by that user',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'reassignUserId',
+        description: 'Reassign all items owned by this user to the specified user ID',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(
+        response: 204,
+        description: 'successful operation',
+        content: new OA\JsonContent(
+            type: 'array',
+            items: new OA\Items(ref: '#/components/schemas/User')
+        )
+    )]
     /**
      * Deletes a User
      *
-     * @SWG\Delete(
-     *  path="/user/{userId}",
-     *  operationId="userDelete",
-     *  tags={"user"},
-     *  summary="User Delete",
-     *  description="Delete user",
-     *  @SWG\Parameter(
-     *      name="userId",
-     *      in="path",
-     *      description="Id of the user to delete",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="deleteAllItems",
-     *      in="formData",
-     *      description="Flag indicating whether to delete all items owned by that user",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="reassignUserId",
-     *      in="formData",
-     *      description="Reassign all items owned by this user to the specified user ID",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=204,
-     *      description="successful operation",
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/User")
-     *      )
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -1578,37 +1368,36 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/user/permissions/{entity}/{objectId}',
+        operationId: 'userPermissionsSearch',
+        description: 'Permission data for the Entity and Object Provided.',
+        summary: 'Permission Data',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'entity',
+        description: 'The Entity',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'objectId',
+        description: 'The ID of the Object to return permissions for',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(
+            type: 'array',
+            items: new OA\Items(ref: '#/components/schemas/Permission')
+        )
+    )]
     /**
-     * @SWG\Get(
-     *  path="/user/permissions/{entity}/{objectId}",
-     *  operationId="userPermissionsSearch",
-     *  tags={"user"},
-     *  summary="Permission Data",
-     *  description="Permission data for the Entity and Object Provided.",
-     *  @SWG\Parameter(
-     *      name="entity",
-     *      in="path",
-     *      description="The Entity",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="objectId",
-     *      in="path",
-     *      description="The ID of the Object to return permissions for",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/Permission")
-     *      )
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param string $entity
@@ -1631,8 +1420,24 @@ class User extends Base
             throw new AccessDeniedException(__('You do not have permission to edit these permissions.'));
         }
 
+        $userPermissionsSortQuery = $this->gridRenderSort(
+            $sanitizedParams,
+            $this->isJson($request),
+            'group'
+        );
+        $userPermissionsFilterBy = $this->gridRenderFilter([
+            'name' => $sanitizedParams->getString('name'),
+            'isUserSpecific' => $sanitizedParams->getInt('isUserSpecific')
+        ], $sanitizedParams);
+
         // List of all Groups with a view / edit / delete check box
-        $permissions = $this->permissionFactory->getAllByObjectId($this->getUser(), $object->permissionsClass(), $id, $this->gridRenderSort($sanitizedParams), $this->gridRenderFilter(['name' => $sanitizedParams->getString('name')], $sanitizedParams));
+        $permissions = $this->permissionFactory->getAllByObjectId(
+            $this->getUser(),
+            $object->permissionsClass(),
+            $id,
+            $userPermissionsSortQuery,
+            $userPermissionsFilterBy
+        );
 
         $this->getState()->template = 'grid';
         $this->getState()->setData($permissions);
@@ -1642,37 +1447,36 @@ class User extends Base
     }
 
 
+    #[OA\Get(
+        path: '/user/permissions/{entity}',
+        operationId: 'userPermissionsMultiSearch',
+        description: 'Permission data for the multiple Entities and Objects Provided.',
+        summary: 'Permission Data',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'entity',
+        description: 'The Entity',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'ids',
+        description: 'The IDs of the Objects to return permissions for',
+        in: 'query',
+        required: true,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(
+            type: 'array',
+            items: new OA\Items(ref: '#/components/schemas/Permission')
+        )
+    )]
     /**
-     * @SWG\Get(
-     *  path="/user/permissions/{entity}",
-     *  operationId="userPermissionsMultiSearch",
-     *  tags={"user"},
-     *  summary="Permission Data",
-     *  description="Permission data for the multiple Entities and Objects Provided.",
-     *  @SWG\Parameter(
-     *      name="entity",
-     *      in="path",
-     *      description="The Entity",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ids",
-     *      in="query",
-     *      description="The IDs of the Objects to return permissions for",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/Permission")
-     *      )
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param string $entities
@@ -1834,48 +1638,43 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Post(
+        path: '/user/permissions/{entity}/{objectId}',
+        operationId: 'userPermissionsSet',
+        description: 'Set Permissions to users/groups for the provided entity.',
+        summary: 'Permission Set',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'entity',
+        description: 'The Entity',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'objectId',
+        description: 'The ID of the Object to set permissions on',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'groupIds',
+        description: 'Array of permissions with groupId as the key',
+        in: 'query',
+        required: true,
+        schema: new OA\Schema(items: new OA\Items(type: 'string'), type: 'array')
+    )]
+    #[OA\Parameter(
+        name: 'ownerId',
+        description: 'Change the owner of this item. Leave empty to keep the current owner',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(response: 204, description: 'successful operation')]
     /**
-     * @SWG\Post(
-     *  path="/user/permissions/{entity}/{objectId}",
-     *  operationId="userPermissionsSet",
-     *  tags={"user"},
-     *  summary="Permission Set",
-     *  description="Set Permissions to users/groups for the provided entity.",
-     *  @SWG\Parameter(
-     *      name="entity",
-     *      in="path",
-     *      description="The Entity",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="objectId",
-     *      in="path",
-     *      description="The ID of the Object to set permissions on",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="groupIds",
-     *      in="formData",
-     *      description="Array of permissions with groupId as the key",
-     *      type="array",
-     *      required=true,
-     *      @SWG\Items(type="string")
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ownerId",
-     *      in="formData",
-     *      description="Change the owner of this item. Leave empty to keep the current owner",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=204,
-     *      description="successful operation"
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param string $entity
@@ -1990,48 +1789,43 @@ class User extends Base
     }
 
 
+    #[OA\Post(
+        path: '/user/permissions/{entity}/multiple',
+        operationId: 'userPermissionsMultiSet',
+        description: 'Set Permissions to users/groups for multiple provided entities.',
+        summary: 'Multiple Permission Set',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'entity',
+        description: 'The Entity type',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'ids',
+        description: 'Array of object IDs',
+        in: 'query',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'groupIds',
+        description: 'Array of permissions with groupId as the key',
+        in: 'query',
+        required: true,
+        schema: new OA\Schema(items: new OA\Items(type: 'string'), type: 'array')
+    )]
+    #[OA\Parameter(
+        name: 'ownerId',
+        description: 'Change the owner of this item. Leave empty to keep the current owner',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(response: 204, description: 'successful operation')]
     /**
-     * @SWG\Post(
-     *  path="/user/permissions/{entity}/multiple",
-     *  operationId="userPermissionsMultiSet",
-     *  tags={"user"},
-     *  summary="Multiple Permission Set",
-     *  description="Set Permissions to users/groups for multiple provided entities.",
-     *  @SWG\Parameter(
-     *      name="entity",
-     *      in="path",
-     *      description="The Entity type",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ids",
-     *      in="formData",
-     *      description="Array of object IDs",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="groupIds",
-     *      in="formData",
-     *      description="Array of permissions with groupId as the key",
-     *      type="array",
-     *      required=true,
-     *      @SWG\Items(type="string")
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ownerId",
-     *      in="formData",
-     *      description="Change the owner of this item. Leave empty to keep the current owner",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=204,
-     *      description="successful operation"
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param string $entity
@@ -2146,29 +1940,29 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/user/pref',
+        operationId: 'userPrefGet',
+        description: 'User preferences for non-state information, such as Layout designer zoom levels',
+        summary: 'Retrieve User Preferences',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'preference',
+        description: 'An optional preference',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful response',
+        content: new OA\JsonContent(
+            type: 'array',
+            items: new OA\Items(ref: '#/components/schemas/UserOption')
+        )
+    )]
     /**
-     * @SWG\Get(
-     *     path="/user/pref",
-     *     operationId="userPrefGet",
-     *     tags={"user"},
-     *     summary="Retrieve User Preferences",
-     *     description="User preferences for non-state information, such as Layout designer zoom levels",
-     *     @SWG\Parameter(
-     *      name="preference",
-     *      in="query",
-     *      description="An optional preference",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful response",
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/UserOption")
-     *      )
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -2194,27 +1988,31 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Post(
+        path: '/user/pref',
+        operationId: 'userPrefEdit',
+        description: 'Save User preferences for non-state information, such as Layout designer zoom levels',
+        summary: 'Save User Preferences',
+        tags: ['user']
+    )]
+    #[OA\RequestBody(
+        content: new OA\MediaType(
+            mediaType: 'application/json',
+            schema: new OA\Schema(
+                properties: [
+                    new OA\Property(
+                        property: 'preference',
+                        items: new OA\Items(ref: '#/components/schemas/UserOption'),
+                        type: 'array'
+                    )
+                ],
+                required: ['preference']
+            )
+        ),
+        required: true
+    )]
+    #[OA\Response(response: 204, description: 'successful operation')]
     /**
-     * @SWG\Post(
-     *     path="/user/pref",
-     *     operationId="userPrefEdit",
-     *     tags={"user"},
-     *     summary="Save User Preferences",
-     *     description="Save User preferences for non-state information, such as Layout designer zoom levels",
-     *     @SWG\Parameter(
-     *      name="preference",
-     *      in="body",
-     *      required=true,
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/UserOption")
-     *      )
-     *   ),
-     *   @SWG\Response(
-     *      response=204,
-     *      description="successful operation"
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return Response
@@ -2403,42 +2201,30 @@ class User extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Put(
+        path: '/user/pref',
+        operationId: 'userPrefEditFromForm',
+        description: 'Save User preferences from the Preferences form.',
+        summary: 'Save User Preferences',
+        tags: ['user']
+    )]
+    #[OA\RequestBody(
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                properties: [
+                    new OA\Property(property: 'navigationMenuPosition', type: 'string'),
+                    new OA\Property(property: 'useLibraryDuration', type: 'integer'),
+                    new OA\Property(property: 'showThumbnailColumn', type: 'integer'),
+                    new OA\Property(property: 'rememberFolderTreeStateGlobally', type: 'integer')
+                ],
+                required: ['navigationMenuPosition']
+            )
+        ),
+        required: true
+    )]
+    #[OA\Response(response: 204, description: 'successful operation')]
     /**
-     * @SWG\Put(
-     *     path="/user/pref",
-     *     operationId="userPrefEditFromForm",
-     *     tags={"user"},
-     *     summary="Save User Preferences",
-     *     description="Save User preferences from the Preferences form.",
-     *     @SWG\Parameter(
-     *      name="navigationMenuPosition",
-     *      in="formData",
-     *      required=true,
-     *      type="string"
-     *   ),
-     *     @SWG\Parameter(
-     *      name="useLibraryDuration",
-     *      in="formData",
-     *      required=false,
-     *      type="integer"
-     *   ),
-     *     @SWG\Parameter(
-     *      name="showThumbnailColumn",
-     *      in="formData",
-     *      required=false,
-     *      type="integer"
-     *   ),
-     *     @SWG\Parameter(
-     *      name="rememberFolderTreeStateGlobally",
-     *      in="formData",
-     *      required=false,
-     *      type="integer"
-     *   ),
-     *   @SWG\Response(
-     *      response=204,
-     *      description="successful operation"
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -2561,6 +2347,209 @@ class User extends Base
             'id' => $user->userId,
             'data' => $user
         ]);
+
+        return $this->render($request, $response);
+    }
+
+    /**
+     * Get user features
+     * @return array
+     */
+    private function getUserFeatures(): array
+    {
+        $userFeatures = [];
+
+        foreach ($this->userGroupFactory->getFeatures() as $key => $feature) {
+            $userFeatures[$key] = $this->getUser()->featureEnabled($feature);
+        };
+
+        return $userFeatures;
+    }
+
+    /**
+     * Get the user filters
+     * @param $sanitizedParams
+     * @return array
+     */
+    private function getUserFilters($sanitizedParams): array
+    {
+        return $this->gridRenderFilter([
+            'userId' => $sanitizedParams->getInt('userId'),
+            'userTypeId' => $sanitizedParams->getInt('userTypeId'),
+            'userName' => $sanitizedParams->getString('userName'),
+            'firstName' => $sanitizedParams->getString('firstName'),
+            'lastName' => $sanitizedParams->getString('lastName'),
+            'useRegexForName' => $sanitizedParams->getCheckbox('useRegexForName'),
+            'retired' => $sanitizedParams->getInt('retired'),
+            'logicalOperatorName' => $sanitizedParams->getString('logicalOperatorName'),
+            'userGroupIdMembers' => $sanitizedParams->getInt('userGroupIdMembers'),
+        ], $sanitizedParams);
+    }
+
+    /**
+     * Decorate user properties
+     * @param $request
+     * @param $user
+     * @throws InvalidArgumentException
+     */
+    private function decorateUserProperties($request, $user)
+    {
+        $user->setUnmatchedProperty('libraryQuotaFormatted', ByteFormatter::format($user->libraryQuota * 1024));
+
+        $user->loggedIn = $this->sessionFactory->getActiveSessionsForUser($user->userId);
+
+        $this->getLog()->debug('Logged in status for user ID ' . $user->userId . ' with name ' .
+            $user->userName . ' is ' . $user->loggedIn);
+
+        // Set some text for the display status
+        $user->setUnmatchedProperty('twoFactorDescription', $this->getTwoFactorDescription($user->twoFactorTypeId));
+
+        // Deal with the home page
+        try {
+            $user->setUnmatchedProperty(
+                'homePage',
+                $this->userGroupFactory->getHomepageByName($user->homePageId)->title
+            );
+        } catch (NotFoundException $exception) {
+            $this->getLog()->error('User has homepage which does not exist. userId: ' . $user->userId . ', homepage: ' . $user->homePageId);
+            $user->setUnmatchedProperty('homePage', __('Unknown homepage, please edit to update.'));
+        }
+
+        // Set the home folder
+        $user->setUnmatchedProperty('homeFolder', $user->getUnmatchedProperty('homeFolder', '/'));
+
+        $user->setUnmatchedProperty('isSuperAdmin', $user->isSuperAdmin());
+
+        $user->setUnmatchedProperty('userPermissions', $this->getUser()->getPermission($user));
+
+        // TODO: Remove buttons
+        if ($this->isApi($request) || $this->isJson($request)) {
+            return;
+        }
+
+        $user->includeProperty('buttons');
+
+        // Super admins have some buttons
+        if ($this->getUser()->featureEnabled('users.modify')
+            && $this->getUser()->checkEditable($user)
+        ) {
+            // Edit
+            $user->buttons[] = [
+                'id' => 'user_button_edit',
+                'url' => $this->urlFor($request,'user.edit.form', ['id' => $user->userId]),
+                'text' => __('Edit')
+            ];
+        }
+
+        if ($this->getUser()->featureEnabled('users.modify')
+            && $this->getUser()->checkDeleteable($user)
+            && $user->userId != $this->getConfig()->getSetting('SYSTEM_USER')
+            && $this->getUser()->userId !== $user->userId
+            && ( ($this->getUser()->isGroupAdmin() && $user->userTypeId == 3) || $this->getUser()->isSuperAdmin() )
+        ) {
+            // Delete
+            $user->buttons[] = [
+                'id' => 'user_button_delete',
+                'url' => $this->urlFor($request,'user.delete.form', ['id' => $user->userId]),
+                'text' => __('Delete')
+            ];
+        }
+
+        if ($this->getUser()->featureEnabled('folder.userHome')) {
+            $user->buttons[] = [
+                'id' => 'user_button_set_home',
+                'url' => $this->urlFor($request, 'user.homeFolder.form', ['id' => $user->userId]),
+                'text' => __('Set Home Folder'),
+                'multi-select' => true,
+                'dataAttributes' => [
+                    ['name' => 'commit-url', 'value' => $this->urlFor($request, 'user.homeFolder', ['id' => $user->userId])],
+                    ['name' => 'commit-method', 'value' => 'post'],
+                    ['name' => 'id', 'value' => 'user_button_set_home'],
+                    ['name' => 'text', 'value' => __('Set home folder')],
+                    ['name' => 'rowtitle', 'value' => $user->userName],
+                    ['name' => 'form-callback', 'value' => 'userHomeFolderMultiselectFormOpen']
+                ],
+            ];
+        }
+
+        if ($this->getUser()->featureEnabled('users.modify')
+            && $this->getUser()->checkPermissionsModifyable($user)
+        ) {
+            $user->buttons[] = ['divider' => true];
+
+            // User Groups
+            $user->buttons[] = array(
+                'id' => 'user_button_group_membership',
+                'url' => $this->urlFor($request,'user.membership.form', ['id' => $user->userId]),
+                'text' => __('User Groups')
+            );
+        }
+
+        if ($this->getUser()->isSuperAdmin()) {
+            $user->buttons[] = ['divider' => true];
+
+            // Features
+            $user->buttons[] = [
+                'id' => 'user_button_page_security',
+                'url' => $this->urlFor($request,'group.acl.form', ['id' => $user->groupId, 'userId' => $user->userId]),
+                'text' => __('Features'),
+                'title' => __('Turn Features on/off for this User')
+            ];
+        }
+    }
+
+    /**
+     * Get the two factor description
+     * @param $twoFactorTypeId
+     * @return string
+     */
+    private function getTwoFactorDescription($twoFactorTypeId): string
+    {
+        return match ($twoFactorTypeId) {
+            1 => __('Email'),
+            2 => __('Google Authenticator'),
+            default => __('Disabled'),
+        };
+    }
+
+    #[OA\Get(
+        path: '/user/{id}/applications',
+        operationId: 'userApplicationsGrid',
+        description: 'Get authorized applications for a specific user',
+        summary: 'User Applications',
+        tags: ['user']
+    )]
+    #[OA\Parameter(
+        name: 'id',
+        in: 'path',
+        description: 'The user ID',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation'
+    )]
+    /**
+     * @param Request $request
+     * @param Response $response
+     * @param $id
+     * @return \Psr\Http\Message\ResponseInterface|Response
+     * @throws AccessDeniedException
+     */
+    public function applicationsGrid(Request $request, Response $response, $id)
+    {
+        $user = $this->userFactory->getById($id);
+
+        if ($this->getUser()->userId !== $user->userId && !$this->getUser()->checkEditable($user)) {
+            throw new AccessDeniedException();
+        }
+
+        $applications = $this->applicationFactory->getAuthorisedByUserId($user->userId);
+
+        $this->getState()->template = 'grid';
+        $this->getState()->recordsTotal = count($applications);
+        $this->getState()->setData($applications);
 
         return $this->render($request, $response);
     }

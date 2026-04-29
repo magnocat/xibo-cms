@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2025 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -25,6 +25,7 @@ use Carbon\Carbon;
 use GuzzleHttp\Client;
 use Illuminate\Support\Str;
 use Intervention\Image\ImageManagerStatic as Img;
+use OpenApi\Attributes as OA;
 use Psr\Http\Message\ResponseInterface;
 use Respect\Validation\Validator as v;
 use Slim\Http\Response as Response;
@@ -54,10 +55,11 @@ use Xibo\Factory\UserGroupFactory;
 use Xibo\Factory\WidgetFactory;
 use Xibo\Helper\ByteFormatter;
 use Xibo\Helper\DateFormatHelper;
-use Xibo\Helper\Environment;
 use Xibo\Helper\HttpsDetect;
-use Xibo\Helper\LinkSigner;
+use Xibo\Helper\LibraryDescription;
 use Xibo\Helper\XiboUploadHandler;
+use Xibo\Middleware\TokenAuthMiddleware;
+use Xibo\Service\JwtServiceInterface;
 use Xibo\Service\MediaService;
 use Xibo\Service\MediaServiceInterface;
 use Xibo\Support\Exception\AccessDeniedException;
@@ -162,7 +164,8 @@ class Library extends Base
         $userGroupFactory,
         $displayFactory,
         $scheduleFactory,
-        $folderFactory
+        $folderFactory,
+        private readonly JwtServiceInterface $jwtService,
     ) {
         $this->moduleFactory = $moduleFactory;
         $this->mediaFactory = $mediaFactory;
@@ -258,56 +261,37 @@ class Library extends Base
         return $this->mediaService->setUser($this->getUser());
     }
 
-    /**
-     * Displays the page logic
-     * @param Request $request
-     * @param Response $response
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws GeneralException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function displayPage(Request $request, Response $response)
-    {
-        $sanitizedParams = $this->getSanitizer($request->getQueryParams());
-        $mediaId = $sanitizedParams->getInt('mediaId');
-
-        if ($mediaId !== null) {
-            $media = $this->mediaFactory->getById($mediaId);
-            if (!$this->getUser()->checkViewable($media)) {
-                throw new AccessDeniedException();
-            }
-
-            // Thumbnail
-            $module = $this->moduleFactory->getByType($media->mediaType);
-            $media->setUnmatchedProperty('thumbnail', '');
-            if ($module->hasThumbnail) {
-                $media->setUnmatchedProperty(
-                    'thumbnail',
-                    $this->urlFor($request, 'library.download', [
-                        'id' => $media->mediaId
-                    ], [
-                        'preview' => 1
-                    ])
-                );
-            }
-            $media->setUnmatchedProperty('fileSizeFormatted', ByteFormatter::format($media->fileSize));
-
-            $this->getState()->template = 'library-direct-media-details';
-            $this->getState()->setData([
-                'media' => $media
-            ]);
-        } else {
-            // Users we have permission to see
-            $this->getState()->template = 'library-page';
-            $this->getState()->setData([
-                'modules' => $this->moduleFactory->getLibraryModules(),
-                'validExt' => implode('|', $this->moduleFactory->getValidExtensions([]))
-            ]);
-        }
-
-        return $this->render($request, $response);
-    }
-
+    #[OA\Put(
+        path: '/library/setenablestat/{mediaId}',
+        operationId: 'mediaSetEnableStat',
+        description: 'Set Enable Stats Collection? to use for the collection of Proof of Play statistics for a media.', // phpcs:ignore
+        summary: 'Enable Stats Collection',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media ID',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                required: ['enableStat'],
+                properties: [
+                    new OA\Property(
+                        property: 'enableStat',
+                        description: 'The option to enable the collection of Media Proof of Play statistics',
+                        type: 'string'
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(response: 204, description: 'successful operation')]
     /**
      * Set Enable Stats Collection of a media
      * @param Request $request
@@ -321,31 +305,6 @@ class Library extends Base
      * @throws NotFoundException
      * @throws \Xibo\Support\Exception\ControllerNotImplemented
      * @throws \Xibo\Support\Exception\DuplicateEntityException
-     * @SWG\Put(
-     *  path="/library/setenablestat/{mediaId}",
-     *  operationId="mediaSetEnableStat",
-     *  tags={"library"},
-     *  summary="Enable Stats Collection",
-     *  description="Set Enable Stats Collection? to use for the collection of Proof of Play statistics for a media.",
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media ID",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="enableStat",
-     *      in="formData",
-     *      description="The option to enable the collection of Media Proof of Play statistics",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *      response=204,
-     *      description="successful operation"
-     *  )
-     * )
      */
     public function setEnableStat(Request $request, Response $response, $id)
     {
@@ -371,146 +330,180 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/library',
+        operationId: 'librarySearch',
+        description: 'Search the Library for this user',
+        summary: 'Library Search',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'Filter by Media Id',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'keyword',
+        description: 'Filter by Media Name, ID, or original filename',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'media',
+        description: 'Filter by Media Name',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'type',
+        description: 'Filter by Media Type',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'ownerId',
+        description: 'Filter by Owner Id',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'retired',
+        description: 'Filter by Retired',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'tags',
+        description: 'Filter by Tags - comma seperated',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'exactTags',
+        description: 'A flag indicating whether to treat the tags filter as an exact match',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'logicalOperator',
+        description: 'When filtering by multiple Tags, which logical operator should be used? AND|OR',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'duration',
+        description: 'Filter by Duration - a number or less-than,greater-than,less-than-equal or great-than-equal followed by a | followed by a number', // phpcs:ignore
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'fileSize',
+        description: 'Filter by File Size - a number or less-than,greater-than,less-than-equal or great-than-equal followed by a | followed by a number', // phpcs:ignore
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Parameter(
+        name: 'ownerUserGroupId',
+        description: 'Filter by users in this UserGroupId',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'folderId',
+        description: 'Filter by Folder ID',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'isReturnPublicUrls',
+        description: 'Should the thumbnail URLs be authenticated S3 style public URL, default = false',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'modifiedDateFrom',
+        description: 'Start date for filtering media by modified date',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'date')
+    )]
+    #[OA\Parameter(
+        name: 'modifiedDateTo',
+        description: 'End date for filtering media by modified date',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'date')
+    )]
+    #[OA\Parameter(
+        name: 'sortBy',
+        description: 'Specifies which field the results are sorted by. Used together with sortDir',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(
+            type: 'string',
+            enum: [
+                'mediaId',
+                'name',
+                'type',
+                'duration',
+                'fileSize',
+                'owner',
+                'sharing',
+                'released',
+                'fileName',
+                'enableStat',
+                'createdAt',
+                'modifiedDt',
+                'expires',
+                'revised',
+                'formattedDuration',
+                'durationSeconds',
+                'fileSizeFormatted',
+                'mediaType',
+                'resolution'
+            ]
+        )
+    )]
+    #[OA\Parameter(
+        name: 'sortDir',
+        description: 'Sort direction',
+        in: 'query',
+        required: false,
+        schema: new OA\Schema(type: 'string', enum: ['asc', 'desc'])
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        headers: [
+            new OA\Header(
+                header: 'X-Total-Count',
+                description: 'The total number of records',
+                schema: new OA\Schema(type: 'integer')
+            )
+        ],
+        content: new OA\JsonContent(
+            type: 'array',
+            items: new OA\Items(ref: '#/components/schemas/Media')
+        )
+    )]
     /**
-     * Set Enable Stat Form
-     * @param Request $request
-     * @param Response $response
-     * @param $id
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws AccessDeniedException
-     * @throws GeneralException
-     * @throws NotFoundException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function setEnableStatForm(Request $request, Response $response, $id)
-    {
-        // Get the Media
-        $media = $this->mediaFactory->getById($id);
-
-        // Check Permissions
-        if (!$this->getUser()->checkViewable($media)) {
-            throw new AccessDeniedException();
-        }
-
-        $data = [
-            'media' => $media,
-        ];
-
-        $this->getState()->template = 'library-form-setenablestat';
-        $this->getState()->setData($data);
-
-        return $this->render($request, $response);
-    }
-
-    /**
-     * Prints out a Table of all media items
+     * Returns the list of all media items
      *
-     * @SWG\Get(
-     *  path="/library",
-     *  operationId="librarySearch",
-     *  tags={"library"},
-     *  summary="Library Search",
-     *  description="Search the Library for this user",
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="query",
-     *      description="Filter by Media Id",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="media",
-     *      in="query",
-     *      description="Filter by Media Name",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="type",
-     *      in="query",
-     *      description="Filter by Media Type",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ownerId",
-     *      in="query",
-     *      description="Filter by Owner Id",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="retired",
-     *      in="query",
-     *      description="Filter by Retired",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="tags",
-     *      in="query",
-     *      description="Filter by Tags - comma seperated",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="exactTags",
-     *      in="query",
-     *      description="A flag indicating whether to treat the tags filter as an exact match",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *   @SWG\Parameter(
-     *      name="logicalOperator",
-     *      in="query",
-     *      description="When filtering by multiple Tags, which logical operator should be used? AND|OR",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="duration",
-     *      in="query",
-     *      description="Filter by Duration - a number or less-than,greater-than,less-than-equal or great-than-equal followed by a | followed by a number",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="fileSize",
-     *      in="query",
-     *      description="Filter by File Size - a number or less-than,greater-than,less-than-equal or great-than-equal followed by a | followed by a number",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="ownerUserGroupId",
-     *      in="query",
-     *      description="Filter by users in this UserGroupId",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="folderId",
-     *      in="query",
-     *      description="Filter by Folder ID",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="isReturnPublicUrls",
-     *      in="query",
-     *      description="Should the thumbail URLs be authenticated S3 style public URL, default = false",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/Media")
-     *      )
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -520,322 +513,83 @@ class Library extends Base
      */
     public function grid(Request $request, Response $response)
     {
-        $user = $this->getUser();
-
         $parsedQueryParams = $this->getSanitizer($request->getQueryParams());
 
         // Variables used for link signing
         $isReturnPublicUrls = $parsedQueryParams->getCheckbox('isReturnPublicUrls') == 1;
-        $thumbnailRouteName = $isReturnPublicUrls ? 'library.public.thumbnail' : 'library.thumbnail';
-        $encryptionKey = $this->getConfig()->getApiKeyDetails()['encryptionKey'];
-        $rootUrl = (new HttpsDetect())->getUrl();
 
         // Construct the SQL
-        $mediaList = $this->mediaFactory->query($this->gridRenderSort($parsedQueryParams), $this->gridRenderFilter([
-            'mediaId' => $parsedQueryParams->getInt('mediaId'),
-            'name' => $parsedQueryParams->getString('media'),
-            'useRegexForName' => $parsedQueryParams->getCheckbox('useRegexForName'),
-            'nameExact' => $parsedQueryParams->getString('nameExact'),
-            'type' => $parsedQueryParams->getString('type'),
-            'types' => $parsedQueryParams->getArray('types'),
-            'tags' => $parsedQueryParams->getString('tags'),
-            'exactTags' => $parsedQueryParams->getCheckbox('exactTags'),
-            'ownerId' => $parsedQueryParams->getInt('ownerId'),
-            'retired' => $parsedQueryParams->getInt('retired'),
-            'duration' => $parsedQueryParams->getInt('duration'),
-            'fileSize' => $parsedQueryParams->getString('fileSize'),
-            'ownerUserGroupId' => $parsedQueryParams->getInt('ownerUserGroupId'),
-            'assignable' => $parsedQueryParams->getInt('assignable'),
-            'folderId' => $parsedQueryParams->getInt('folderId'),
-            'onlyMenuBoardAllowed' => $parsedQueryParams->getInt('onlyMenuBoardAllowed'),
-            'layoutId' => $parsedQueryParams->getInt('layoutId'),
-            'includeLayoutBackgroundImage' => ($parsedQueryParams->getInt('layoutId') != null) ? 1 : 0,
-            'orientation' => $parsedQueryParams->getString('orientation', ['defaultOnEmptyString' => true]),
-            'logicalOperator' => $parsedQueryParams->getString('logicalOperator'),
-            'logicalOperatorName' => $parsedQueryParams->getString('logicalOperatorName'),
-            'unreleasedOnly' => $parsedQueryParams->getCheckbox('unreleasedOnly'),
-            'unusedOnly' => $parsedQueryParams->getCheckbox('unusedOnly'),
-        ], $parsedQueryParams));
+        $mediaSortQuery = $this->gridRenderSort($parsedQueryParams, $this->isJson($request));
+        $mediaFilterQuery = $this->getMediaFilters($parsedQueryParams);
+
+        $mediaList = $this->mediaFactory->query($mediaSortQuery, $mediaFilterQuery);
 
         // Add some additional row content
         foreach ($mediaList as $media) {
-            $media->setUnmatchedProperty('revised', ($media->parentId != 0) ? 1 : 0);
-
-            // Thumbnail
-            $media->setUnmatchedProperty('thumbnail', '');
-            try {
-                $module = $this->moduleFactory->getByType($media->mediaType);
-                if ($module->hasThumbnail) {
-                    $renderThumbnail = true;
-                    // for video, check if the cover image exists here.
-                    if ($media->mediaType === 'video') {
-                        $libraryLocation = $this->getConfig()->getSetting('LIBRARY_LOCATION');
-                        $renderThumbnail = file_exists($libraryLocation . $media->mediaId . '_videocover.png');
-                    }
-
-                    if ($renderThumbnail) {
-                        $thumbnailUrl = $this->urlFor($request, $thumbnailRouteName, [
-                            'id' => $media->mediaId,
-                        ]);
-
-                        if ($isReturnPublicUrls) {
-                            // If we are coming from the API we should remove the /api part of the URL
-                            if ($this->isApi($request)) {
-                                $thumbnailUrl = str_replace('/api/', '/', $thumbnailUrl);
-                            }
-
-                            // Sign the link.
-                            $thumbnailUrl = $rootUrl . $thumbnailUrl . '?' . LinkSigner::getSignature(
-                                $rootUrl,
-                                $thumbnailUrl,
-                                time() + 3600,
-                                $encryptionKey,
-                            );
-                        }
-
-                        $media->setUnmatchedProperty('thumbnail', $thumbnailUrl);
-                    }
-                }
-            } catch (NotFoundException) {
-                $this->getLog()->error('Module ' . $media->mediaType . ' not found');
-            }
-
-            $media->setUnmatchedProperty('fileSizeFormatted', ByteFormatter::format($media->fileSize));
-
-            // Media expiry
-            $media->setUnmatchedProperty('mediaExpiresIn', __('Expires %s'));
-            $media->setUnmatchedProperty('mediaExpiryFailed', __('Expired '));
-            $media->setUnmatchedProperty('mediaNoExpiryDate', __('Never'));
-
-            if ($this->isApi($request)) {
-                $media->excludeProperty('mediaExpiresIn');
-                $media->excludeProperty('mediaExpiryFailed');
-                $media->excludeProperty('mediaNoExpiryDate');
-                $media->expires = ($media->expires == 0)
-                    ? 0
-                    : Carbon::createFromTimestamp($media->expires)->format(DateFormatHelper::getSystemFormat());
-                continue;
-            }
-
-            $media->includeProperty('buttons');
-
-            switch ($media->released) {
-                case 1:
-                    $media->setUnmatchedProperty('releasedDescription', '');
-                    break;
-
-                case 2:
-                    $media->setUnmatchedProperty(
-                        'releasedDescription',
-                        __('The uploaded image is too large and cannot be processed, please use another image.')
-                    );
-                    break;
-
-                default:
-                    $media->setUnmatchedProperty(
-                        'releasedDescription',
-                        __('This image will be resized according to set thresholds and limits.')
-                    );
-            }
-
-            switch ($media->enableStat) {
-                case 'On':
-                    $media->setUnmatchedProperty(
-                        'enableStatDescription',
-                        __('This Media has enable stat collection set to ON')
-                    );
-                    break;
-
-                case 'Off':
-                    $media->setUnmatchedProperty(
-                        'enableStatDescription',
-                        __('This Media has enable stat collection set to OFF')
-                    );
-                    break;
-
-                default:
-                    $media->setUnmatchedProperty(
-                        'enableStatDescription',
-                        __('This Media has enable stat collection set to INHERIT')
-                    );
-            }
-
-            if ($parsedQueryParams->getCheckbox('fullScreenScheduleCheck')) {
-                $fullScreenCampaignId = $this->hasFullScreenLayout($media);
-                $media->setUnmatchedProperty('hasFullScreenLayout', (!empty($fullScreenCampaignId)));
-                $media->setUnmatchedProperty('fullScreenCampaignId', $fullScreenCampaignId);
-            }
-
-            $media->buttons = [];
-
-            // Buttons
-            if ($this->getUser()->featureEnabled('library.modify')
-                && $user->checkEditable($media)
-            ) {
-                // Edit
-                $media->buttons[] = array(
-                    'id' => 'content_button_edit',
-                    'url' => $this->urlFor($request, 'library.edit.form', ['id' => $media->mediaId]),
-                    'text' => __('Edit')
-                );
-
-                // Copy Button
-                $media->buttons[] = array(
-                    'id' => 'media_button_copy',
-                    'url' => $this->urlFor($request, 'library.copy.form', ['id' => $media->mediaId]),
-                    'text' => __('Copy')
-                );
-
-                // Select Folder
-                if ($this->getUser()->featureEnabled('folder.view')) {
-                    $media->buttons[] = [
-                        'id' => 'library_button_selectfolder',
-                        'url' => $this->urlFor($request, 'library.selectfolder.form', ['id' => $media->mediaId]),
-                        'text' => __('Select Folder'),
-                        'multi-select' => true,
-                        'dataAttributes' => [
-                            [
-                                'name' => 'commit-url', 'value' => $this->urlFor($request, 'library.selectfolder', [
-                                    'id' => $media->mediaId
-                                ])
-                            ],
-                            ['name' => 'commit-method', 'value' => 'put'],
-                            ['name' => 'id', 'value' => 'library_button_selectfolder'],
-                            ['name' => 'text', 'value' => __('Move to Folder')],
-                            ['name' => 'rowtitle', 'value' => $media->name],
-                            ['name' => 'form-callback', 'value' => 'moveFolderMultiSelectFormOpen']
-                        ]
-                    ];
-                }
-            }
-
-            if ($this->getUser()->featureEnabled('library.modify')
-                && $user->checkDeleteable($media)
-            ) {
-                // Delete Button
-                $media->buttons[] = [
-                    'id' => 'content_button_delete',
-                    'url' => $this->urlFor($request,'library.delete.form', ['id' => $media->mediaId]),
-                    'text' => __('Delete'),
-                    'multi-select' => true,
-                    'dataAttributes' => [
-                        ['name' => 'commit-url', 'value' => $this->urlFor($request,'library.delete', ['id' => $media->mediaId])],
-                        ['name' => 'commit-method', 'value' => 'delete'],
-                        ['name' => 'id', 'value' => 'content_button_delete'],
-                        ['name' => 'text', 'value' => __('Delete')],
-                        ['name' => 'sort-group', 'value' => 1],
-                        ['name' => 'rowtitle', 'value' => $media->name],
-                        ['name' => 'form-callback', 'value' => 'setDefaultMultiSelectFormOpen']
-                    ]
-                ];
-            }
-
-            if ($this->getUser()->featureEnabled('library.modify')
-                && $user->checkPermissionsModifyable($media)
-            ) {
-                // Permissions
-                $media->buttons[] = [
-                    'id' => 'content_button_permissions',
-                    'url' => $this->urlFor($request,'user.permissions.form', ['entity' => 'Media', 'id' => $media->mediaId]),
-                    'text' => __('Share'),
-                    'multi-select' => true,
-                    'dataAttributes' => [
-                        ['name' => 'commit-url', 'value' => $this->urlFor($request,'user.permissions.multi', ['entity' => 'Media', 'id' => $media->mediaId])],
-                        ['name' => 'commit-method', 'value' => 'post'],
-                        ['name' => 'id', 'value' => 'content_button_permissions'],
-                        ['name' => 'text', 'value' => __('Share')],
-                        ['name' => 'rowtitle', 'value' => $media->name],
-                        ['name' => 'sort-group', 'value' => 2],
-                        ['name' => 'custom-handler', 'value' => 'XiboMultiSelectPermissionsFormOpen'],
-                        ['name' => 'custom-handler-url', 'value' => $this->urlFor($request,'user.permissions.multi.form', ['entity' => 'Media'])],
-                        ['name' => 'content-id-name', 'value' => 'mediaId']
-                    ]
-                ];
-            }
-
-            // Download
-            // No feature permissions here, anyone can get a file based on sharing.
-            $media->buttons[] = ['divider' => true];
-            $media->buttons[] = array(
-                'id' => 'content_button_download',
-                'linkType' => '_self', 'external' => true,
-                'url' => $this->urlFor($request, 'library.download', ['id' => $media->mediaId]) . '?attachment=' . urlencode($media->fileName),
-                'text' => __('Download')
-            );
-
-            // Set Enable Stat
-            if ($this->getUser()->featureEnabled('library.modify')
-                && $this->getUser()->checkEditable($media)
-            ) {
-                $media->buttons[] = ['divider' => true];
-
-                $media->buttons[] = array(
-                    'id' => 'library_button_setenablestat',
-                    'url' => $this->urlFor($request,'library.setenablestat.form', ['id' => $media->mediaId]),
-                    'text' => __('Enable stats collection?'),
-                    'multi-select' => true,
-                    'dataAttributes' => array(
-                        array('name' => 'commit-url', 'value' => $this->urlFor($request,'library.setenablestat', ['id' => $media->mediaId])),
-                        array('name' => 'commit-method', 'value' => 'put'),
-                        array('name' => 'id', 'value' => 'library_button_setenablestat'),
-                        array('name' => 'text', 'value' => __('Enable stats collection?')),
-                        array('name' => 'rowtitle', 'value' => $media->name),
-                        ['name' => 'form-callback', 'value' => 'setEnableStatMultiSelectFormOpen']
-                    )
-                );
-            }
-
-            if ($this->getUser()->featureEnabled(['schedule.view', 'layout.view'])) {
-                $media->buttons[] = ['divider' => true];
-
-                $media->buttons[] = array(
-                    'id' => 'usage_report_button',
-                    'url' => $this->urlFor($request, 'library.usage.form', ['id' => $media->mediaId]),
-                    'text' => __('Usage Report')
-                );
-            }
-
-            // Schedule
-            if ($this->getUser()->featureEnabled('schedule.add')
-                && in_array($media->mediaType, ['image', 'video'])
-                && ($this->getUser()->checkEditable($media)
-                    || $this->getConfig()->getSetting('SCHEDULE_WITH_VIEW_PERMISSION') == 1)
-            ) {
-                $media->buttons[] = [
-                    'id' => 'library_button_schedule',
-                    'url' => $this->urlFor(
-                        $request,
-                        'schedule.add.form',
-                        ['id' => $media->mediaId, 'from' => 'Library']
-                    ),
-                    'text' => __('Schedule')
-                ];
-            }
+            $this->decorateMediaProperties($request, $parsedQueryParams, $media);
         }
 
-        $this->getState()->template = 'grid';
-        $this->getState()->recordsTotal = $this->mediaFactory->countLast();
-        $this->getState()->setData($mediaList);
+        $recordsTotal = $this->mediaFactory->countLast();
 
-        return $this->render($request, $response);
+        return $response
+            ->withStatus(200)
+            ->withHeader('X-Total-Count', $recordsTotal)
+            ->withJson($mediaList);
     }
 
+    #[OA\Get(
+        path: '/library/{mediaId}',
+        operationId: 'librarySearchById',
+        description: 'Get the Media object specified by the provided mediaId',
+        summary: 'Library search by ID',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'Numeric ID of the Media to get',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/Media')
+    )]
     /**
-     * @SWG\Get(
-     *  path="/library/search",
-     *  operationId="librarySearchAll",
-     *  tags={"library"},
-     *  summary="Library Search All",
-     *  description="Search all library files from local and connectors",
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(
-     *          type="array",
-     *          @SWG\Items(ref="#/definitions/SearchResult")
-     *      )
-     *  )
-     * )
+     * @param Request $request
+     * @param Response $response
+     * @param int $id
+     * @return Response|ResponseInterface
+     * @throws NotFoundException
+     */
+    public function searchById(Request $request, Response $response, int $id): Response|ResponseInterface
+    {
+        $parsedQueryParams = $this->getSanitizer($request->getQueryParams());
+        $media = $this->mediaFactory->getById($id, false);
+        $this->decorateMediaProperties($request, $parsedQueryParams, $media);
+
+        return $response
+            ->withStatus(200)
+            ->withJson($media);
+    }
+
+    #[OA\Get(
+        path: '/library/search',
+        operationId: 'librarySearchAll',
+        description: 'Search all library files from local and connectors',
+        summary: 'Library Search All',
+        tags: ['library']
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(
+            type: 'array',
+            items: new OA\Items(ref: '#/components/schemas/SearchResult')
+        )
+    )]
+    /**
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -957,36 +711,42 @@ class Library extends Base
         return $response->withJson($providers);
     }
 
-    /**
-     * Media Delete Form
-     * @param Request $request
-     * @param Response $response
-     * @param $id
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws AccessDeniedException
-     * @throws GeneralException
-     * @throws NotFoundException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function deleteForm(Request $request, Response $response, $id)
-    {
-        $media = $this->mediaFactory->getById($id);
-
-        if (!$this->getUser()->checkDeleteable($media)) {
-            throw new AccessDeniedException();
-        }
-
-        $this->getDispatcher()->dispatch(MediaFullLoadEvent::$NAME, new MediaFullLoadEvent($media));
-        $media->load(['deleting' => true]);
-
-        $this->getState()->template = 'library-form-delete';
-        $this->getState()->setData([
-            'media' => $media,
-        ]);
-
-        return $this->render($request, $response);
-    }
-
+    #[OA\Delete(
+        path: '/library/{mediaId}',
+        operationId: 'libraryDelete',
+        description: 'Delete Media from the Library',
+        summary: 'Delete Media',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media ID to Delete',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                required: ['forceDelete'],
+                properties: [
+                    new OA\Property(
+                        property: 'forceDelete',
+                        description: 'If the media item has been used should it be force removed from items that uses it?', // phpcs:ignore
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'purge',
+                        description: 'Should this Media be added to the Purge List for all Displays?',
+                        type: 'integer'
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(response: 204, description: 'successful operation')]
     /**
      * Delete Media
      * @param Request $request
@@ -1000,38 +760,6 @@ class Library extends Base
      * @throws NotFoundException
      * @throws \Xibo\Support\Exception\ControllerNotImplemented
      * @throws \Xibo\Support\Exception\DuplicateEntityException
-     * @SWG\Delete(
-     *  path="/library/{mediaId}",
-     *  operationId="libraryDelete",
-     *  tags={"library"},
-     *  summary="Delete Media",
-     *  description="Delete Media from the Library",
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media ID to Delete",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="forceDelete",
-     *      in="formData",
-     *      description="If the media item has been used should it be force removed from items that uses it?",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="purge",
-     *      in="formData",
-     *      description="Should this Media be added to the Purge List for all Displays?",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=204,
-     *      description="successful operation"
-     *  )
-     * )
      */
     public function delete(Request $request, Response $response, $id)
     {
@@ -1067,6 +795,87 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Post(
+        path: '/library',
+        operationId: 'libraryAdd',
+        description: 'Add Media to the Library, optionally replacing an existing media item, optionally adding to a playlist.', // phpcs:ignore
+        summary: 'Add Media',
+        tags: ['library']
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'multipart/form-data',
+            schema: new OA\Schema(
+                required: ['files'],
+                properties: [
+                    new OA\Property(
+                        property: 'files',
+                        description: 'The Uploaded File',
+                        type: 'string',
+                        format: 'binary'
+                    ),
+                    new OA\Property(property: 'name', description: 'Optional Media Name', type: 'string'),
+                    new OA\Property(
+                        property: 'oldMediaId',
+                        description: 'Id of an existing media file which should be replaced with the new upload',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'updateInLayouts',
+                        description: 'Flag (0, 1), set to 1 to update this media in all layouts (use with oldMediaId) ', // phpcs:ignore
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'deleteOldRevisions',
+                        description: 'Flag (0 , 1), to either remove or leave the old file revisions (use with oldMediaId)', // phpcs:ignore
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'tags',
+                        description: 'Comma separated string of Tags that should be assigned to uploaded Media',
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'expires',
+                        description: 'Date in Y-m-d H:i:s format, will set expiration date on the uploaded Media',
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'playlistId',
+                        description: 'A playlistId to add this uploaded media to',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'widgetFromDt',
+                        description: 'Date in Y-m-d H:i:s format, will set widget start date. Requires a playlistId.',
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'widgetToDt',
+                        description: 'Date in Y-m-d H:i:s format, will set widget end date. Requires a playlistId.',
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'deleteOnExpiry',
+                        description: 'Flag (0, 1), set to 1 to remove the Widget from the Playlist when the widgetToDt has been reached', // phpcs:ignore
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'applyToMedia',
+                        description: 'Flag (0, 1), set to 1 to apply the widgetFromDt as the expiry date on the Media',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'folderId',
+                        description: 'Folder ID to which this object should be assigned to',
+                        type: 'integer'
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(response: 200, description: 'successful operation')]
     /**
      * Add a file to the library
      *  expects to be fed by the blueimp file upload handler
@@ -1078,108 +887,6 @@ class Library extends Base
      * @throws InvalidArgumentException
      * @throws NotFoundException
      * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     * @SWG\Post(
-     *  path="/library",
-     *  operationId="libraryAdd",
-     *  tags={"library"},
-     *  summary="Add Media",
-     *  description="Add Media to the Library, optionally replacing an existing media item, optionally adding to a playlist.",
-     *  @SWG\Parameter(
-     *      name="files",
-     *      in="formData",
-     *      description="The Uploaded File",
-     *      type="file",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="name",
-     *      in="formData",
-     *      description="Optional Media Name",
-     *      type="string",
-     *      required=false
-     *  ),
-     *  @SWG\Parameter(
-     *      name="oldMediaId",
-     *      in="formData",
-     *      description="Id of an existing media file which should be replaced with the new upload",
-     *      type="integer",
-     *      required=false
-     *  ),
-     *  @SWG\Parameter(
-     *      name="updateInLayouts",
-     *      in="formData",
-     *      description="Flag (0, 1), set to 1 to update this media in all layouts (use with oldMediaId) ",
-     *      type="integer",
-     *      required=false
-     *  ),
-     *  @SWG\Parameter(
-     *      name="deleteOldRevisions",
-     *      in="formData",
-     *      description="Flag (0 , 1), to either remove or leave the old file revisions (use with oldMediaId)",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="tags",
-     *      in="formData",
-     *      description="Comma separated string of Tags that should be assigned to uploaded Media",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="expires",
-     *      in="formData",
-     *      description="Date in Y-m-d H:i:s format, will set expiration date on the uploaded Media",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="playlistId",
-     *      in="formData",
-     *      description="A playlistId to add this uploaded media to",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="widgetFromDt",
-     *      in="formData",
-     *      description="Date in Y-m-d H:i:s format, will set widget start date. Requires a playlistId.",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="widgetToDt",
-     *      in="formData",
-     *      description="Date in Y-m-d H:i:s format, will set widget end date. Requires a playlistId.",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="deleteOnExpiry",
-     *      in="formData",
-     *      description="Flag (0, 1), set to 1 to remove the Widget from the Playlist when the widgetToDt has been reached",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="applyToMedia",
-     *      in="formData",
-     *      description="Flag (0, 1), set to 1 to apply the widgetFromDt as the expiry date on the Media",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="folderId",
-     *      in="formData",
-     *      description="Folder ID to which this object should be assigned to",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation"
-     *  )
-     * )
      */
     public function add(Request $request, Response $response)
     {
@@ -1201,7 +908,8 @@ class Library extends Base
             $playlist = $this->playlistFactory->getById($parsedBody->getInt('playlistId'));
 
             if ($playlist->isDynamic === 1) {
-                throw new InvalidArgumentException(__('This Playlist is dynamically managed so cannot accept manual assignments.'), 'isDynamic');
+                throw new InvalidArgumentException(__('This Playlist is dynamically managed so cannot accept 
+                    manual assignments.'), 'isDynamic');
             }
         }
 
@@ -1237,7 +945,10 @@ class Library extends Base
         if ($parsedBody->getInt('oldMediaId', ['default' => $options['oldMediaId']]) !== null) {
             $media = $this->mediaFactory->getById($parsedBody->getInt('oldMediaId', ['default' => $options['oldMediaId']]));
             $folderId = $media->folderId;
-            $validExt = $this->moduleFactory->getValidExtensions(['type' => $media->mediaType, 'allowMediaTypeChange' => $options['allowMediaTypeChange']]);
+            $validExt = $this->moduleFactory->getValidExtensions([
+                'type' => $media->mediaType,
+                'allowMediaTypeChange' => $options['allowMediaTypeChange']
+            ]);
         } else {
             $validExt = $this->moduleFactory->getValidExtensions();
         }
@@ -1250,8 +961,14 @@ class Library extends Base
             'controller' => $this,
             'oldMediaId' => $parsedBody->getInt('oldMediaId', ['default' => $options['oldMediaId']]),
             'widgetId' => $parsedBody->getInt('widgetId'),
-            'updateInLayouts' => $parsedBody->getCheckbox('updateInLayouts', ['default' => $options['updateInLayouts']]),
-            'deleteOldRevisions' => $parsedBody->getCheckbox('deleteOldRevisions', ['default' => $options['deleteOldRevisions']]),
+            'updateInLayouts' => $parsedBody->getCheckbox(
+                'updateInLayouts',
+                ['default' => $options['updateInLayouts']]
+            ),
+            'deleteOldRevisions' => $parsedBody->getCheckbox(
+                'deleteOldRevisions',
+                ['default' => $options['deleteOldRevisions']]
+            ),
             'allowMediaTypeChange' => $options['allowMediaTypeChange'],
             'displayOrder' => $parsedBody->getInt('displayOrder'),
             'playlistId' => $parsedBody->getInt('playlistId'),
@@ -1279,108 +996,65 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
-    /**
-     * Edit Form
-     * @param Request $request
-     * @param Response $response
-     * @param $id
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws AccessDeniedException
-     * @throws GeneralException
-     * @throws NotFoundException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function editForm(Request $request, Response $response, $id)
-    {
-        $media = $this->mediaFactory->getById($id);
-
-        if (!$this->getUser()->checkEditable($media)) {
-            throw new AccessDeniedException();
-        }
-
-        $media->enableStat = ($media->enableStat == null) ? $this->getConfig()->getSetting('MEDIA_STATS_ENABLED_DEFAULT') : $media->enableStat;
-
-        $this->getState()->template = 'library-form-edit';
-        $this->getState()->setData([
-            'media' => $media,
-            'validExtensions' => implode('|', $this->moduleFactory->getValidExtensions(['type' => $media->mediaType])),
-            'expiryDate' => ($media->expires == 0 ) ? null : Carbon::createFromTimestamp($media->expires)->format(DateFormatHelper::getSystemFormat(), $media->expires)
-        ]);
-
-        return $this->render($request, $response);
-    }
-
+    #[OA\Put(
+        path: '/library/{mediaId}',
+        operationId: 'libraryEdit',
+        description: 'Edit a Media Item in the Library',
+        summary: 'Edit Media',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media ID to Edit',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                required: ['name', 'duration', 'retired'],
+                properties: [
+                    new OA\Property(property: 'name', description: 'Media Item Name', type: 'string'),
+                    new OA\Property(
+                        property: 'duration',
+                        description: 'The duration in seconds for this Media Item',
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'retired',
+                        description: 'Flag indicating if this media is retired',
+                        type: 'integer'
+                    ),
+                    new OA\Property(property: 'tags', description: 'Comma separated list of Tags', type: 'string'),
+                    new OA\Property(
+                        property: 'updateInLayouts',
+                        description: 'Flag indicating whether to update the duration in all Layouts the Media is assigned to', // phpcs:ignore
+                        type: 'integer'
+                    ),
+                    new OA\Property(
+                        property: 'expires',
+                        description: 'Date in Y-m-d H:i:s format, will set expiration date on the Media item',
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'folderId',
+                        description: 'Folder ID to which this media should be assigned to',
+                        type: 'integer'
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/Media')
+    )]
     /**
      * Edit Media
-     *
-     * @SWG\Put(
-     *  path="/library/{mediaId}",
-     *  operationId="libraryEdit",
-     *  tags={"library"},
-     *  summary="Edit Media",
-     *  description="Edit a Media Item in the Library",
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media ID to Edit",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="name",
-     *      in="formData",
-     *      description="Media Item Name",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="duration",
-     *      in="formData",
-     *      description="The duration in seconds for this Media Item",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="retired",
-     *      in="formData",
-     *      description="Flag indicating if this media is retired",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="tags",
-     *      in="formData",
-     *      description="Comma separated list of Tags",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="updateInLayouts",
-     *      in="formData",
-     *      description="Flag indicating whether to update the duration in all Layouts the Media is assigned to",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="expires",
-     *      in="formData",
-     *      description="Date in Y-m-d H:i:s format, will set expiration date on the Media item",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="folderId",
-     *      in="formData",
-     *      description="Folder ID to which this media should be assigned to",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Media")
-     *  )
-     * )
      *
      * @param Request $request
      * @param Response $response
@@ -1471,73 +1145,28 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
-    /**
-     * Tidy Library
-     * @param Request $request
-     * @param Response $response
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws ConfigurationException
-     * @throws GeneralException
-     * @throws NotFoundException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function tidyForm(Request $request, Response $response)
-    {
-        if ($this->getConfig()->getSetting('SETTING_LIBRARY_TIDY_ENABLED') != 1) {
-            throw new ConfigurationException(__('Sorry this function is disabled.'));
-        }
-
-        // Work out how many files there are
-        $media = $this->mediaFactory->query(null, ['unusedOnly' => 1, 'ownerId' => $this->getUser()->userId]);
-
-        $sumExcludingGeneric = 0;
-        $countExcludingGeneric = 0;
-        $sumGeneric = 0;
-        $countGeneric = 0;
-
-        foreach ($media as $item) {
-            if ($item->mediaType == 'genericfile') {
-                $countGeneric++;
-                $sumGeneric = $sumGeneric + $item->fileSize;
-            }
-            else {
-                $countExcludingGeneric++;
-                $sumExcludingGeneric = $sumExcludingGeneric + $item->fileSize;
-            }
-        }
-
-        $this->getState()->template = 'library-form-tidy';
-        $this->getState()->setData([
-            'sumExcludingGeneric' => ByteFormatter::format($sumExcludingGeneric),
-            'sumGeneric' => ByteFormatter::format($sumGeneric),
-            'countExcludingGeneric' => $countExcludingGeneric,
-            'countGeneric' => $countGeneric,
-        ]);
-
-        return $this->render($request, $response);
-    }
-
+    #[OA\Delete(
+        path: '/library/tidy',
+        operationId: 'libraryTidy',
+        description: 'Routine tidy of the library, removing unused files.',
+        summary: 'Tidy Library',
+        tags: ['library']
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                properties: [
+                    new OA\Property(property: 'tidyGenericFiles', description: 'Also delete generic files?', type: 'integer')
+                ]
+            )
+        )
+    )]
+    #[OA\Response(response: 200, description: 'successful operation')]
     /**
      * Tidies up the library
      *
-     * @SWG\Delete(
-     *  path="/library/tidy",
-     *  operationId="libraryTidy",
-     *  tags={"library"},
-     *  summary="Tidy Library",
-     *  description="Routine tidy of the library, removing unused files.",
-     *  @SWG\Parameter(
-     *      name="tidyGenericFiles",
-     *      in="formData",
-     *      description="Also delete generic files?",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation"
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -1596,45 +1225,48 @@ class Library extends Base
         return $this->getConfig()->getSetting('LIBRARY_LOCATION') . '/cache';
     }
 
+    #[OA\Get(
+        path: '/library/download/{mediaId}/{type}',
+        operationId: 'libraryDownload',
+        description: 'Download a Media file from the Library',
+        summary: 'Download Media',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media ID to Download',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Parameter(
+        name: 'type',
+        description: 'The Module Type of the Download',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'string')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        headers: [
+            new OA\Header(
+                header: 'X-Sendfile',
+                description: 'Apache Send file header - if enabled.',
+                schema: new OA\Schema(type: 'string')
+            ),
+            new OA\Header(
+                header: 'X-Accel-Redirect',
+                description: 'nginx send file header - if enabled.',
+                schema: new OA\Schema(type: 'string')
+            )
+        ],
+        content: new OA\MediaType(
+            mediaType: 'application/octet-stream',
+            schema: new OA\Schema(type: 'string', format: 'binary')
+        )
+    )]
     /**
-     * @SWG\Get(
-     *  path="/library/download/{mediaId}/{type}",
-     *  operationId="libraryDownload",
-     *  tags={"library"},
-     *  summary="Download Media",
-     *  description="Download a Media file from the Library",
-     *  produces={"application/octet-stream"},
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media ID to Download",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="type",
-     *      in="path",
-     *      description="The Module Type of the Download",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(type="file"),
-     *      @SWG\Header(
-     *          header="X-Sendfile",
-     *          description="Apache Send file header - if enabled.",
-     *          type="string"
-     *      ),
-     *      @SWG\Header(
-     *          header="X-Accel-Redirect",
-     *          description="nginx send file header - if enabled.",
-     *          type="string"
-     *      )
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -1682,7 +1314,7 @@ class Library extends Base
             $this->getLog()->debug('download: preview mode, seeing if we can output an image/video');
 
             // Output a 1px image if we're not allowed to see the media.
-            if (!$this->getUser()->checkViewable($media)) {
+            if (!$this->getUser()->checkViewable($media) && $request->getAttribute('authedViaToken') !== true) {
                 echo Img::make($this->getConfig()->uri('img/1x1.png', true))->encode();
                 return $this->render($request, $response->withHeader('Content-Type', 'image/png'));
             }
@@ -1709,7 +1341,7 @@ class Library extends Base
             $this->getLog()->debug('download: not preview mode, expect a full download');
 
             // We are not a preview, and therefore we ought to check sharing before we download
-            if (!$this->getUser()->checkViewable($media)) {
+            if (!$this->getUser()->checkViewable($media) && $request->getAttribute('authedViaToken') !== true) {
                 throw new AccessDeniedException();
             }
 
@@ -1719,48 +1351,52 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/library/thumbnail/{mediaId}',
+        operationId: 'libraryThumbnail',
+        description: 'Download thumbnail for a Media file from the Library',
+        summary: 'Download Thumbnail',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media ID to Download',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        headers: [
+            new OA\Header(
+                header: 'X-Sendfile',
+                description: 'Apache Send file header - if enabled.',
+                schema: new OA\Schema(type: 'string')
+            ),
+            new OA\Header(
+                header: 'X-Accel-Redirect',
+                description: 'nginx send file header - if enabled.',
+                schema: new OA\Schema(type: 'string')
+            )
+        ],
+        content: new OA\MediaType(
+            mediaType: 'application/octet-stream',
+            schema: new OA\Schema(type: 'string', format: 'binary')
+        )
+    )]
     /**
      * Thumbnail for the libary page
      *  this is called by library-page datatable
      *
-     * @SWG\Get(
-     *  path="/library/thumbnail/{mediaId}",
-     *  operationId="libraryThumbnail",
-     *  tags={"library"},
-     *  summary="Download Thumbnail",
-     *  description="Download thumbnail for a Media file from the Library",
-     *  produces={"application/octet-stream"},
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media ID to Download",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(type="file"),
-     *      @SWG\Header(
-     *          header="X-Sendfile",
-     *          description="Apache Send file header - if enabled.",
-     *          type="string"
-     *      ),
-     *      @SWG\Header(
-     *          header="X-Accel-Redirect",
-     *          description="nginx send file header - if enabled.",
-     *          type="string"
-     *      )
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
+     * @param bool $isForceGrantAccess
      * @return \Psr\Http\Message\ResponseInterface|Response
      * @throws \Xibo\Support\Exception\GeneralException
      */
-    public function thumbnail(Request $request, Response $response, $id, bool $isForceGrantAccess = false)
+    public function thumbnail(Request $request, Response $response, $id)
     {
         $this->setNoOutput();
 
@@ -1775,7 +1411,7 @@ class Library extends Base
             . '. Media is a ' . $media->mediaType);
 
         // Permissions.
-        if (!$this->getUser()->checkViewable($media) && !$isForceGrantAccess) {
+        if (!$this->getUser()->checkViewable($media) && $request->getAttribute('authedViaToken') !== true) {
             // Output a 1px image if we're not allowed to see the media.
             echo Img::make($this->getConfig()->uri('img/1x1.png', true))->encode();
             return $this->render($request, $response);
@@ -1796,52 +1432,6 @@ class Library extends Base
         );
 
         return $this->render($request, $response);
-    }
-
-    /**
-     * Public Thumbnail
-     *  this is an unauthenticated route (publicRoutes)
-     *  we need to authenticate using the S3 link signing
-     * @param Request $request
-     * @param Response $response
-     * @param $id
-     * @return \Slim\Http\Response
-     * @throws \Xibo\Support\Exception\AccessDeniedException
-     * @throws \Xibo\Support\Exception\GeneralException
-     */
-    public function thumbnailPublic(Request $request, Response $response, $id): Response
-    {
-        // Authenticate.
-        $params = $this->getSanitizer($request->getParams());
-
-        // Has the URL expired
-        if (time() > $params->getInt('X-Amz-Expires')) {
-            throw new AccessDeniedException(__('Expired'));
-        }
-
-        // Validate the URL.
-        $encryptionKey = $this->getConfig()->getApiKeyDetails()['encryptionKey'];
-        $signature = $params->getString('X-Amz-Signature');
-
-        $calculatedSignature = \Xibo\Helper\LinkSigner::getSignature(
-            (new HttpsDetect())->getUrl(),
-            $request->getUri()->getPath(),
-            $params->getInt('X-Amz-Expires'),
-            $encryptionKey,
-            $params->getString('X-Amz-Date'),
-            true,
-        );
-
-        if ($signature !== $calculatedSignature) {
-            throw new AccessDeniedException(__('Invalid URL'));
-        }
-
-        $this->getLog()->debug('thumbnailPublic: authorised for ' . $id);
-
-        $res = $this->thumbnail($request, $response, $id, true);
-
-        // Pass to the thumbnail route
-        return $res->withHeader('Access-Control-Allow-Origin', '*');
     }
 
     /**
@@ -1874,35 +1464,43 @@ class Library extends Base
         return $this->add($request->withParsedBody(['options' => $options]), $response);
     }
 
+    #[OA\Post(
+        path: '/library/{mediaId}/tag',
+        operationId: 'mediaTag',
+        description: 'Tag a Media with one or more tags',
+        summary: 'Tag Media',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media Id to Tag',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                required: ['tag'],
+                properties: [
+                    new OA\Property(
+                        property: 'tag',
+                        description: 'An array of tags',
+                        type: 'array',
+                        items: new OA\Items(type: 'string')
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/Media')
+    )]
     /**
-     * @SWG\Post(
-     *  path="/library/{mediaId}/tag",
-     *  operationId="mediaTag",
-     *  tags={"library"},
-     *  summary="Tag Media",
-     *  description="Tag a Media with one or more tags",
-     * @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media Id to Tag",
-     *      type="integer",
-     *      required=true
-     *   ),
-     * @SWG\Parameter(
-     *      name="tag",
-     *      in="formData",
-     *      description="An array of tags",
-     *      type="array",
-     *      required=true,
-     *      @SWG\Items(type="string")
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Media")
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -1948,35 +1546,43 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Post(
+        path: '/library/{mediaId}/untag',
+        operationId: 'mediaUntag',
+        description: 'Untag a Media with one or more tags',
+        summary: 'Untag Media',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media Id to Untag',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                required: ['tag'],
+                properties: [
+                    new OA\Property(
+                        property: 'tag',
+                        description: 'An array of tags',
+                        type: 'array',
+                        items: new OA\Items(type: 'string')
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/Media')
+    )]
     /**
-     * @SWG\Post(
-     *  path="/library/{mediaId}/untag",
-     *  operationId="mediaUntag",
-     *  tags={"library"},
-     *  summary="Untag Media",
-     *  description="Untag a Media with one or more tags",
-     * @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media Id to Untag",
-     *      type="integer",
-     *      required=true
-     *   ),
-     * @SWG\Parameter(
-     *      name="tag",
-     *      in="formData",
-     *      description="An array of tags",
-     *      type="array",
-     *      required=true,
-     *      @SWG\Items(type="string")
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Media")
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -2022,58 +1628,22 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/library/usage/{mediaId}',
+        operationId: 'libraryUsageReport',
+        description: 'Get the records for the library item usage report',
+        summary: 'Get Library Item Usage Report',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media Id',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(response: 200, description: 'successful operation')]
     /**
-     * Library Usage Report Form
-     * @param Request $request
-     * @param Response $response
-     * @param $id
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws AccessDeniedException
-     * @throws GeneralException
-     * @throws NotFoundException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function usageForm(Request $request, Response $response, $id)
-    {
-        $media = $this->mediaFactory->getById($id);
-        $sanitizedParams = $this->getSanitizer($request->getParams());
-
-        if (!$this->getUser()->checkViewable($media)) {
-            throw new AccessDeniedException();
-        }
-
-        // Get a list of displays that this mediaId is used on
-        $displays = $this->displayFactory->query($this->gridRenderSort($sanitizedParams), $this->gridRenderFilter(['disableUserCheck' => 1, 'mediaId' => $id], $sanitizedParams));
-
-        $this->getState()->template = 'library-form-usage';
-        $this->getState()->setData([
-            'media' => $media,
-            'countDisplays' => count($displays)
-        ]);
-
-        return $this->render($request, $response);
-    }
-
-    /**
-     * @SWG\Get(
-     *  path="/library/usage/{mediaId}",
-     *  operationId="libraryUsageReport",
-     *  tags={"library"},
-     *  summary="Get Library Item Usage Report",
-     *  description="Get the records for the library item usage report",
-     * @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media Id",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *     response=200,
-     *     description="successful operation"
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -2171,26 +1741,22 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/library/usage/layouts/{mediaId}',
+        operationId: 'libraryUsageLayoutsReport',
+        description: 'Get the records for the library item usage report for Layouts',
+        summary: 'Get Library Item Usage Report for Layouts',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media Id',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(response: 200, description: 'successful operation')]
     /**
-     * @SWG\Get(
-     *  path="/library/usage/layouts/{mediaId}",
-     *  operationId="libraryUsageLayoutsReport",
-     *  tags={"library"},
-     *  summary="Get Library Item Usage Report for Layouts",
-     *  description="Get the records for the library item usage report for Layouts",
-     * @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media Id",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *     response=200,
-     *     description="successful operation"
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -2218,6 +1784,9 @@ class Library extends Base
         );
 
         if (!$this->isApi($request)) {
+            // We need to generate preview URLs, base URL doesn't chagen between layouts
+            $baseUrl = (new HttpsDetect())->getBaseUrl($request);
+
             foreach ($layouts as $layout) {
                 $layout->includeProperty('buttons');
 
@@ -2227,20 +1796,30 @@ class Library extends Base
                     $layout->buttons[] = array(
                         'id' => 'layout_button_design',
                         'linkType' => '_self', 'external' => true,
-                        'url' => $this->urlFor($request,'layout.designer', ['id' => $layout->layoutId]),
+                        'url' => $this->urlFor($request, 'layout.designer', ['id' => $layout->layoutId]),
                         'text' => __('Design')
                     );
                 }
 
                 // Preview
-                $layout->buttons[] = array(
+                // generate a JWT
+                $jwt = $this->jwtService->generateJwt(
+                    'Preview',
+                    'layout',
+                    $layout->layoutId,
+                    '/preview/layout/preview/' . $layout->layoutId,
+                    3600,
+                )->toString();
+
+                // Add it as a button
+                $layout->buttons[] = [
                     'id' => 'layout_button_preview',
                     'external' => true,
                     'url' => '#',
                     'onclick' => 'createMiniLayoutPreview',
-                    'onclickParam' => $this->urlFor($request, 'layout.preview', ['id' => $layout->layoutId]),
-                    'text' => __('Preview Layout')
-                );
+                    'onclickParam' => $baseUrl . '/preview/layout/preview/' . $layout->layoutId . '?jwt=' . $jwt,
+                    'text' => __('Preview Layout'),
+                ];
             }
         }
 
@@ -2257,76 +1836,47 @@ class Library extends Base
         return $this->render($request, $response);
     }
 
-    /**
-     * Copy Media form
-     * @param Request $request
-     * @param Response $response
-     * @param $id
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws AccessDeniedException
-     * @throws GeneralException
-     * @throws NotFoundException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function copyForm(Request $request, Response $response, $id)
-    {
-        // Get the Media
-        $media = $this->mediaFactory->getById($id);
-
-        // Check Permissions
-        if (!$this->getUser()->checkViewable($media)) {
-            throw new AccessDeniedException();
-        }
-
-        $this->getState()->template = 'library-form-copy';
-        $this->getState()->setData([
-            'media' => $media,
-        ]);
-
-        return $this->render($request, $response);
-    }
-
+    #[OA\Post(
+        path: '/library/copy/{mediaId}',
+        operationId: 'mediaCopy',
+        description: 'Copy a Media, providing a new name and tags if applicable',
+        summary: 'Copy Media',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The media ID to Copy',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                required: ['name'],
+                properties: [
+                    new OA\Property(property: 'name', description: 'The name for the new Media', type: 'string'),
+                    new OA\Property(property: 'tags', description: 'The Optional tags for new Media', type: 'string')
+                ]
+            )
+        )
+    )]
+    #[OA\Response(
+        response: 201,
+        description: 'successful operation',
+        headers: [
+            new OA\Header(
+                header: 'Location',
+                description: 'Location of the new record',
+                schema: new OA\Schema(type: 'string')
+            )
+        ],
+        content: new OA\JsonContent(ref: '#/components/schemas/Media')
+    )]
     /**
      * Copies a Media
-     *
-     * @SWG\Post(
-     *  path="/library/copy/{mediaId}",
-     *  operationId="mediaCopy",
-     *  tags={"library"},
-     *  summary="Copy Media",
-     *  description="Copy a Media, providing a new name and tags if applicable",
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The media ID to Copy",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="name",
-     *      in="formData",
-     *      description="The name for the new Media",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="tags",
-     *      in="formData",
-     *      description="The Optional tags for new Media",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Media"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new record",
-     *          type="string"
-     *      )
-     *  )
-     * )
      *
      * @param Request $request
      * @param Response $response
@@ -2389,26 +1939,22 @@ class Library extends Base
     }
 
 
+    #[OA\Get(
+        path: '/library/{mediaId}/isused/',
+        operationId: 'mediaIsUsed',
+        description: 'Checks if a Media is being used',
+        summary: 'Media usage check',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'mediaId',
+        description: 'The Media Id',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\Response(response: 200, description: 'successful operation')]
     /**
-     * @SWG\Get(
-     *  path="/library/{mediaId}/isused/",
-     *  operationId="mediaIsUsed",
-     *  tags={"library"},
-     *  summary="Media usage check",
-     *  description="Checks if a Media is being used",
-     * @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media Id",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Response(
-     *     response=200,
-     *     description="successful operation"
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -2441,93 +1987,65 @@ class Library extends Base
 
     }
 
-    /**
-     * @param Request $request
-     * @param Response $response
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws GeneralException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function uploadFromUrlForm(Request $request, Response $response)
-    {
-        $this->getState()->template = 'library-form-uploadFromUrl';
-
-        $this->getState()->setData([
-            'uploadSizeMessage' => sprintf(__('This form accepts files up to a maximum size of %s'), Environment::getMaxUploadSize())
-        ]);
-
-        return $this->render($request, $response);
-    }
-
+    #[OA\Post(
+        path: '/library/uploadUrl',
+        operationId: 'uploadFromUrl',
+        description: 'Upload Media to CMS library from an external URL',
+        summary: 'Upload Media from URL',
+        tags: ['library']
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                required: ['url', 'type'],
+                properties: [
+                    new OA\Property(property: 'url', description: 'The URL to the media', type: 'string'),
+                    new OA\Property(property: 'type', description: 'The type of the media, image, video etc', type: 'string'),
+                    new OA\Property(
+                        property: 'extension',
+                        description: 'Optional extension of the media, jpg, png etc. If not set in the request it will be retrieved from the headers', // phpcs:ignore
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'enableStat',
+                        description: 'The option to enable the collection of Media Proof of Play statistics, On, Off or Inherit.', // phpcs:ignore
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'optionalName',
+                        description: 'An optional name for this media file, if left empty it will default to the file name', // phpcs:ignore
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'expires',
+                        description: 'Date in Y-m-d H:i:s format, will set expiration date on the Media item',
+                        type: 'string'
+                    ),
+                    new OA\Property(
+                        property: 'folderId',
+                        description: 'Folder ID to which this media should be assigned to',
+                        type: 'integer'
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(
+        response: 201,
+        description: 'successful operation',
+        headers: [
+            new OA\Header(
+                header: 'Location',
+                description: 'Location of the new record',
+                schema: new OA\Schema(type: 'string')
+            )
+        ],
+        content: new OA\JsonContent(ref: '#/components/schemas/Media')
+    )]
     /**
      * Upload Media via URL
-     *
-     * @SWG\Post(
-     *  path="/library/uploadUrl",
-     *  operationId="uploadFromUrl",
-     *  tags={"library"},
-     *  summary="Upload Media from URL",
-     *  description="Upload Media to CMS library from an external URL",
-     *  @SWG\Parameter(
-     *      name="url",
-     *      in="formData",
-     *      description="The URL to the media",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="type",
-     *      in="formData",
-     *      description="The type of the media, image, video etc",
-     *      type="string",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="extension",
-     *      in="formData",
-     *      description="Optional extension of the media, jpg, png etc. If not set in the request it will be retrieved from the headers",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="enableStat",
-     *      in="formData",
-     *      description="The option to enable the collection of Media Proof of Play statistics, On, Off or Inherit.",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="optionalName",
-     *      in="formData",
-     *      description="An optional name for this media file, if left empty it will default to the file name",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="expires",
-     *      in="formData",
-     *      description="Date in Y-m-d H:i:s format, will set expiration date on the Media item",
-     *      type="string",
-     *      required=false
-     *   ),
-     *  @SWG\Parameter(
-     *      name="folderId",
-     *      in="formData",
-     *      description="Folder ID to which this media should be assigned to",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=201,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Media"),
-     *      @SWG\Header(
-     *          header="Location",
-     *          description="Location of the new record",
-     *          type="string"
-     *      )
-     *  )
-     * )
      *
      * @param Request $request
      * @param Response $response
@@ -2718,65 +2236,41 @@ class Library extends Base
         return $response->withStatus(204);
     }
 
+    #[OA\Put(
+        path: '/library/{id}/selectfolder',
+        operationId: 'librarySelectFolder',
+        description: 'Select Folder for Media',
+        summary: 'Media Select folder',
+        tags: ['library']
+    )]
+    #[OA\Parameter(
+        name: 'id',
+        description: 'The Media ID',
+        in: 'path',
+        required: true,
+        schema: new OA\Schema(type: 'integer')
+    )]
+    #[OA\RequestBody(
+        required: true,
+        content: new OA\MediaType(
+            mediaType: 'application/x-www-form-urlencoded',
+            schema: new OA\Schema(
+                properties: [
+                    new OA\Property(
+                        property: 'folderId',
+                        description: 'Folder ID to which this object should be assigned to',
+                        type: 'integer'
+                    )
+                ]
+            )
+        )
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful operation',
+        content: new OA\JsonContent(ref: '#/components/schemas/Media')
+    )]
     /**
-     * Select Folder Form
-     * @param Request $request
-     * @param Response $response
-     * @param $id
-     * @return \Psr\Http\Message\ResponseInterface|Response
-     * @throws AccessDeniedException
-     * @throws GeneralException
-     * @throws NotFoundException
-     * @throws \Xibo\Support\Exception\ControllerNotImplemented
-     */
-    public function selectFolderForm(Request $request, Response $response, $id)
-    {
-        // Get the Media
-        $media = $this->mediaFactory->getById($id);
-
-        // Check Permissions
-        if (!$this->getUser()->checkEditable($media)) {
-            throw new AccessDeniedException();
-        }
-
-        $data = [
-            'media' => $media
-        ];
-
-        $this->getState()->template = 'library-form-selectfolder';
-        $this->getState()->setData($data);
-
-        return $this->render($request, $response);
-    }
-
-    /**
-     * @SWG\Put(
-     *  path="/library/{id}/selectfolder",
-     *  operationId="librarySelectFolder",
-     *  tags={"library"},
-     *  summary="Media Select folder",
-     *  description="Select Folder for Media",
-     *  @SWG\Parameter(
-     *      name="mediaId",
-     *      in="path",
-     *      description="The Media ID",
-     *      type="integer",
-     *      required=true
-     *   ),
-     *  @SWG\Parameter(
-     *      name="folderId",
-     *      in="formData",
-     *      description="Folder ID to which this object should be assigned to",
-     *      type="integer",
-     *      required=false
-     *   ),
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful operation",
-     *      @SWG\Schema(ref="#/definitions/Campaign")
-     *  )
-     * )
-     *
      * @param Request $request
      * @param Response $response
      * @param $id
@@ -2806,7 +2300,9 @@ class Library extends Base
 
         $media->folderId = $folderId;
         $folder = $this->folderFactory->getById($media->folderId);
-        $media->permissionsFolderId = ($folder->getPermissionFolderId() == null) ? $folder->id : $folder->getPermissionFolderId();
+        $media->permissionsFolderId = ($folder->getPermissionFolderId() == null)
+            ? $folder->id
+            : $folder->getPermissionFolderId();
 
         $media->save(['saveTags' => false]);
 
@@ -2995,13 +2491,145 @@ class Library extends Base
      * @param Media $media
      * @param $folderId
      */
-    private function updateMediaRevision(Media $media, $folderId)
+    private function updateMediaRevision(Media $media, $folderId): void
     {
         $oldMedia = $this->mediaFactory->getParentById($media->mediaId);
         $oldMedia->folderId = $folderId;
         $folder = $this->folderFactory->getById($oldMedia->folderId);
-        $folder->permissionsFolderId = ($folder->getPermissionFolderId() == null) ? $folder->id : $folder->getPermissionFolderId();
+        $folder->permissionsFolderId = ($folder->getPermissionFolderId() == null)
+            ? $folder->id
+            : $folder->getPermissionFolderId();
 
         $oldMedia->save(['saveTags' => false, 'validate' => false]);
+    }
+
+    /**
+     * Get the media filters
+     * @param $parsedQueryParams
+     * @return array
+     */
+    private function getMediaFilters($parsedQueryParams): array
+    {
+        return ($this->gridRenderFilter([
+            'mediaId' => $parsedQueryParams->getInt('mediaId'),
+            'keyword' => $parsedQueryParams->getString('keyword'),
+            'name' => $parsedQueryParams->getString('media'),
+            'useRegexForName' => $parsedQueryParams->getCheckbox('useRegexForName'),
+            'nameExact' => $parsedQueryParams->getString('nameExact'),
+            'type' => $parsedQueryParams->getString('type'),
+            'types' => $parsedQueryParams->getArray('types'),
+            'tags' => $parsedQueryParams->getString('tags'),
+            'exactTags' => $parsedQueryParams->getCheckbox('exactTags'),
+            'ownerId' => $parsedQueryParams->getInt('ownerId'),
+            'retired' => $parsedQueryParams->getInt('retired'),
+            'duration' => $parsedQueryParams->getInt('duration'),
+            'fileSize' => $parsedQueryParams->getString('fileSize'),
+            'ownerUserGroupId' => $parsedQueryParams->getInt('ownerUserGroupId'),
+            'assignable' => $parsedQueryParams->getInt('assignable'),
+            'folderId' => $parsedQueryParams->getInt('folderId'),
+            'onlyMenuBoardAllowed' => $parsedQueryParams->getInt('onlyMenuBoardAllowed'),
+            'layoutId' => $parsedQueryParams->getInt('layoutId'),
+            'includeLayoutBackgroundImage' => ($parsedQueryParams->getInt('layoutId') != null) ? 1 : 0,
+            'displayGroupId' => $parsedQueryParams->getInt('displayGroupId'),
+            'orientation' => $parsedQueryParams->getString('orientation', ['defaultOnEmptyString' => true]),
+            'logicalOperator' => $parsedQueryParams->getString('logicalOperator'),
+            'logicalOperatorName' => $parsedQueryParams->getString('logicalOperatorName'),
+            'unreleasedOnly' => $parsedQueryParams->getCheckbox('unreleasedOnly'),
+            'unusedOnly' => $parsedQueryParams->getCheckbox('unusedOnly'),
+            'modifiedDateFrom' => $parsedQueryParams->getDate('modifiedDateFrom'),
+            'modifiedDateTo' => $parsedQueryParams->getDate('modifiedDateTo'),
+        ], $parsedQueryParams));
+    }
+
+    /**
+     * Get the media thumbnail URL
+     * @param $request
+     * @param $parsedQueryParams
+     * @param $media
+     * @return string
+     */
+    private function getMediaThumbnailUrl($request, $parsedQueryParams, $media): string
+    {
+        // Variables used for link signing/thumbnail generation
+        $isReturnPublicUrls = $parsedQueryParams->getCheckbox('isReturnPublicUrls') == 1;
+        $thumbnailRouteName = $isReturnPublicUrls ? 'library.public.thumbnail' : 'library.thumbnail';
+
+        $thumbnailUrl = '';
+
+        try {
+            $module = $this->moduleFactory->getByType($media->mediaType);
+
+            if ($module->hasThumbnail) {
+                $renderThumbnail = true;
+                // for video, check if the cover image exists here.
+                if ($media->mediaType === 'video') {
+                    $libraryLocation = $this->getConfig()->getSetting('LIBRARY_LOCATION');
+                    $renderThumbnail = file_exists($libraryLocation . $media->mediaId . '_videocover.png');
+                }
+
+                if ($renderThumbnail) {
+                    $thumbnailUrl = $this->urlFor($request, $thumbnailRouteName, [
+                        'id' => $media->mediaId,
+                    ]);
+
+                    if ($isReturnPublicUrls) {
+                        // Sign the link.
+                        $thumbnailUrl = TokenAuthMiddleware::sign(
+                            $request,
+                            '/preview/library/thumbnail/' . $media->mediaId,
+                            time() + 3600,
+                            $this->getConfig()->getApiKeyDetails()['encryptionKey'],
+                        );
+                    }
+                }
+            }
+        } catch (NotFoundException) {
+            $this->getLog()->error('Module ' . $media->mediaType . ' not found');
+        }
+
+        return $thumbnailUrl;
+    }
+
+    /**
+     * Decorate media properties
+     * @param $request
+     * @param $parsedQueryParams
+     * @param $media
+     */
+    private function decorateMediaProperties($request, $parsedQueryParams, $media): void
+    {
+        // Thumbnail
+        $thumbnailUrl = $this->getMediaThumbnailUrl($request, $parsedQueryParams, $media);
+
+        $media->setUnmatchedProperty('thumbnail', $thumbnailUrl);
+
+        // Properties
+        $media->setUnmatchedProperty('revised', ($media->parentId != 0) ? 1 : 0);
+        $media->setUnmatchedProperty('fileSizeFormatted', ByteFormatter::format($media->fileSize));
+
+        // Expiry
+        $media->setUnmatchedProperty('mediaExpiresIn', __('Expires %s'));
+        $media->setUnmatchedProperty('mediaExpiryFailed', __('Expired '));
+        $media->setUnmatchedProperty('mediaNoExpiryDate', __('Never'));
+        $media->expires = ($media->expires == 0)
+            ? 0
+            : Carbon::createFromTimestamp($media->expires)->format(DateFormatHelper::getSystemFormat());
+
+        // Description
+        $releasedDescription = LibraryDescription::getMediaReleasedDescription($media->released);
+        $enableStatDescription = LibraryDescription::getMediaEnableStatDescription($media->enableStat);
+
+        $media->setUnmatchedProperty('releasedDescription', $releasedDescription);
+        $media->setUnmatchedProperty('enableStatDescription', $enableStatDescription);
+
+        // Schedule
+        if ($parsedQueryParams->getCheckbox('fullScreenScheduleCheck')) {
+            $fullScreenCampaignId = $this->hasFullScreenLayout($media);
+            $media->setUnmatchedProperty('hasFullScreenLayout', (!empty($fullScreenCampaignId)));
+            $media->setUnmatchedProperty('fullScreenCampaignId', $fullScreenCampaignId);
+        }
+
+        // User permissions
+        $media->setUnmatchedProperty('userPermissions', $this->getUser()->getPermission($media));
     }
 }

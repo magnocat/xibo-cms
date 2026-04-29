@@ -67,9 +67,11 @@ trait DataTablesDotNetTrait
     /**
      * Set the sort order
      * @param SanitizerInterface|array $sanitizedRequestParams
+     * @param bool $isJson
+     * @param string $defaultSortBy
      * @return array
      */
-    protected function gridRenderSort($sanitizedRequestParams)
+    protected function gridRenderSort($sanitizedRequestParams, bool $isJson = false, string $defaultSortBy = 'name')
     {
         if ($sanitizedRequestParams instanceof SanitizerInterface) {
             $columns = $sanitizedRequestParams->getArray('columns');
@@ -79,8 +81,30 @@ trait DataTablesDotNetTrait
             $order = $sanitizedRequestParams['order'] ?? null;
         }
 
-        if ($columns === null
-            || !is_array($columns)
+        // For JSON requests, handle multi-col sort (i.e. 'name,created_at')
+        if ($isJson) {
+            $sortByList = array_map(
+                'trim',
+                explode(',', $sanitizedRequestParams->getString('sortBy') ?? $defaultSortBy)
+            );
+
+            $sortDirList = array_map(
+                'trim',
+                explode(',', $sanitizedRequestParams->getString('sortDir') ?? 'asc')
+            );
+
+            $columns = [];
+            $order = [];
+
+            foreach ($sortByList as $index => $colName) {
+                if ($colName !== '') {
+                    $columns[] = ['name' => $colName, 'data' => $colName];
+                    $order[] = ['column' => $index, 'dir' => strtolower($sortDirList[$index])];
+                }
+            }
+        }
+
+        if (!is_array($columns)
             || count($columns) <= 0
             || $order === null
             || !is_array($order)
@@ -94,6 +118,7 @@ trait DataTablesDotNetTrait
                 ? $columns[$element['column']]['name']
                 : $columns[$element['column']]['data'];
             $val = preg_replace('/[^A-Za-z0-9_]/', '', $val);
+
             return '`' . $val . '`' . (($element['dir'] == 'desc') ? ' DESC' : '');
         }, $order);
     }

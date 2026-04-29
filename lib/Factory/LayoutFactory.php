@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2024 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -314,16 +314,22 @@ class LayoutFactory extends BaseFactory
     /**
      * Loads only the layout information
      * @param int $layoutId
+     * @param bool $isDisableUserCheck
      * @return Layout
      * @throws NotFoundException
      */
-    public function getById($layoutId)
+    public function getById(int $layoutId, bool $isDisableUserCheck = true)
     {
         if (empty($layoutId)) {
             throw new NotFoundException(__('LayoutId is 0'));
         }
 
-        $layouts = $this->query(null, array('disableUserCheck' => 1, 'layoutId' => $layoutId, 'excludeTemplates' => -1, 'retired' => -1));
+        $layouts = $this->query(null, [
+            'disableUserCheck' => $isDisableUserCheck ? 1 : 0,
+            'layoutId' => $layoutId,
+            'excludeTemplates' => -1,
+            'retired' => -1
+        ]);
 
         if (count($layouts) <= 0) {
             throw new NotFoundException(__('Layout not found'));
@@ -1584,7 +1590,7 @@ class LayoutFactory extends BaseFactory
 
                     $this->getLog()->debug(sprintf(
                         'Checking Widget for the old mediaID [%d] so we can replace it with the new mediaId '
-                            . '[%d] and storedAs [%s]. Media assigned to widget %s.',
+                        . '[%d] and storedAs [%s]. Media assigned to widget %s.',
                         $oldMediaId,
                         $newMediaId,
                         $media->storedAs,
@@ -2153,9 +2159,21 @@ class LayoutFactory extends BaseFactory
         $entries = [];
         $params = [];
 
-        if ($sortOrder === null) {
-            $sortOrder = ['layout'];
-        }
+        // Sorting
+        $allowedColumns = ['layoutId', 'layout', 'publishedStatus', 'enableStat', 'duration', 'owner', 'modifiedDt',
+            'campaignId'
+        ];
+        $customColumns = [
+            'orientation' => 'CASE WHEN layout.`width` < layout.`height` THEN 1 ELSE 0 END',
+            'valid' => '`status`'
+        ];
+
+        $sortOrder = $this->buildSortQuery(
+            $sortOrder,
+            $allowedColumns,
+            $customColumns,
+            ['layout ASC']
+        );
 
         $select  = 'SELECT `layout`.layoutID, 
                         `layout`.parentId,
@@ -2185,6 +2203,7 @@ class LayoutFactory extends BaseFactory
                         `layout`.code,
                         `campaign`.folderId,
                         `campaign`.permissionsFolderId,
+                        `folder`.folderName,
                    ';
 
         if ($parsedFilter->getInt('campaignId') !== null) {
@@ -2205,14 +2224,19 @@ class LayoutFactory extends BaseFactory
                         ) AS groupsWithPermissions ";
         $params['permissionEntityForGroup'] = 'Xibo\\Entity\\Campaign';
 
-        $body  = "   FROM layout ";
-        $body .= '  INNER JOIN status ON status.id = layout.publishedStatusId ';
-        $body .= "  INNER JOIN `lkcampaignlayout` ";
-        $body .= "   ON lkcampaignlayout.LayoutID = layout.LayoutID ";
-        $body .= "   INNER JOIN `campaign` ";
-        $body .= "   ON lkcampaignlayout.CampaignID = campaign.CampaignID ";
-        $body .= "       AND campaign.IsLayoutSpecific = 1";
-        $body .= "   INNER JOIN `user` ON `user`.userId = `campaign`.userId ";
+        $body  = '  FROM layout 
+                    INNER JOIN status 
+                        ON status.id = layout.publishedStatusId
+                    INNER JOIN `lkcampaignlayout`
+                        ON lkcampaignlayout.LayoutID = layout.LayoutID
+                    INNER JOIN `campaign`
+                        ON lkcampaignlayout.CampaignID = campaign.CampaignID
+                            AND campaign.IsLayoutSpecific = 1
+                    INNER JOIN `user` 
+                        ON `user`.userId = `campaign`.userId
+                    INNER JOIN `folder` 
+                        ON `folder`.folderId = `campaign`.folderId
+                 ';
 
         if ($parsedFilter->getInt('campaignId') !== null) {
             // Join Campaign back onto it again
@@ -2559,34 +2583,54 @@ class LayoutFactory extends BaseFactory
         // Used - In active schedule, scheduled in the future, directly assigned to displayGroup, default Layout.
         // Unused - Every layout NOT matching the Used ie not in active schedule, not scheduled in the future, not directly assigned to any displayGroup, not default layout.
         if ($parsedFilter->getInt('filterLayoutStatusId', ['default' => 1]) != 1)  {
+            // Get the current or future scheduled layouts
+            $now = Carbon::now()->format('U');
+
             if ($parsedFilter->getInt('filterLayoutStatusId') == 2) {
-
                 // Only show used layouts
-                $now = Carbon::now()->format('U');
-                $sql = 'SELECT DISTINCT schedule.CampaignID FROM schedule WHERE ( ( schedule.fromDt < '. $now . ' OR schedule.fromDt = 0 ) ' . ' AND schedule.toDt > ' . $now . ') OR schedule.fromDt > ' . $now;
-                $campaignIds = [];
-                foreach ($this->getStore()->select($sql, []) as $row) {
-                    $campaignIds[] = $row['CampaignID'];
-                }
-                $body .= ' AND ('
-                    . '      campaign.CampaignID IN ( ' . implode(',', array_filter($campaignIds)) . ' ) 
-                             OR layout.layoutID IN (SELECT DISTINCT defaultlayoutid FROM display) 
-                             OR layout.layoutID IN (SELECT DISTINCT layoutId FROM lklayoutdisplaygroup)'
-                    . ' ) ';
-            }
-            else {
+                $body .= ' AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM schedule
+                        WHERE schedule.CampaignID = campaign.CampaignID
+                        AND (
+                            (
+                                (schedule.fromDt < :now OR schedule.fromDt = 0)
+                                AND schedule.toDt > :now
+                            )
+                            OR schedule.fromDt > :now
+                        )
+                    )
+                    OR layout.layoutID IN (SELECT DISTINCT defaultlayoutid FROM display)
+                    OR layout.layoutID IN (SELECT DISTINCT layoutId FROM lklayoutdisplaygroup)
+                ) ';
+
+                $params['now'] = $now;
+            } else {
                 // Only show unused layouts
-                $now = Carbon::now()->format('U');
-                $sql = 'SELECT DISTINCT schedule.CampaignID FROM schedule WHERE ( ( schedule.fromDt < '. $now . ' OR schedule.fromDt = 0 ) ' . ' AND schedule.toDt > ' . $now . ') OR schedule.fromDt > ' . $now;
-                $campaignIds = [];
-                foreach ($this->getStore()->select($sql, []) as $row) {
-                    $campaignIds[] = $row['CampaignID'];
+                $body .= '
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM schedule
+                        WHERE schedule.CampaignID = campaign.CampaignID ';
+
+                // Note: For the maintenance XTR, we don't have to add the date in the query
+                if ($parsedFilter->getInt('removeUnusedFullScreenLayouts', ['default' => -1]) != 1) {
+                    $body .=
+                        ' AND (
+                            (
+                                (schedule.fromDt < :now OR schedule.fromDt = 0)
+                                AND schedule.toDt > :now
+                            )
+                            OR schedule.fromDt > :now
+                        )';
+
+                    $params['now'] = $now;
                 }
 
-                $body .= ' AND campaign.CampaignID NOT IN ( ' . implode(',', array_filter($campaignIds)) . ' )  
-                     AND layout.layoutID NOT IN (SELECT DISTINCT defaultlayoutid FROM display) 
-                     AND layout.layoutID NOT IN (SELECT DISTINCT layoutId FROM lklayoutdisplaygroup) 
-                     ';
+                $body .= '
+                    ) AND layout.layoutID NOT IN (SELECT DISTINCT defaultlayoutid FROM display)
+                    AND layout.layoutID NOT IN (SELECT DISTINCT layoutId FROM lklayoutdisplaygroup) ';
             }
         }
 
@@ -2639,15 +2683,21 @@ class LayoutFactory extends BaseFactory
             $params['type'] = $parsedFilter->getString('campaignType');
         }
 
+        if ($parsedFilter->getString('keyword') != null) {
+            // Fulltext search
+            $body .= $this->buildSearchQuery(
+                $parsedFilter->getString('keyword'),
+                $params,
+                ['layout.layout', 'layout.description'],
+                ['layout.layoutId', 'campaign.campaignId'],
+            );
+        }
+
         // Logged in user view permissions
         $this->viewPermissionSql('Xibo\Entity\Campaign', $body, $params, 'campaign.campaignId', 'layout.userId', $filterBy, 'campaign.permissionsFolderId');
 
         // Sorting?
-        $order = '';
-
-        if (is_array($sortOrder)) {
-            $order .= ' ORDER BY ' . implode(',', $sortOrder);
-        }
+        $order = !empty($sortOrder) ? ' ORDER BY ' . implode(', ', $sortOrder) : '';
 
         $limit = '';
         // Paging
@@ -2694,7 +2744,7 @@ class LayoutFactory extends BaseFactory
             $layout->code = $parsedRow->getString('code');
             $layout->folderId = $parsedRow->getInt('folderId');
             $layout->permissionsFolderId = $parsedRow->getInt('permissionsFolderId');
-
+            $layout->folderName = $parsedRow->getString('folderName');
             $layout->groupsWithPermissions = $row['groupsWithPermissions'];
             $layout->setOriginals();
 

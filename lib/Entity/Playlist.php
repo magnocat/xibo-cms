@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2025 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -22,6 +22,7 @@
 namespace Xibo\Entity;
 
 use Carbon\Carbon;
+use OpenApi\Attributes as OA;
 use Xibo\Event\PlaylistDeleteEvent;
 use Xibo\Event\SubPlaylistDurationEvent;
 use Xibo\Event\SubPlaylistWidgetsEvent;
@@ -42,142 +43,131 @@ use Xibo\Support\Exception\NotFoundException;
 /**
  * Class Playlist
  * @package Xibo\Entity
- *
- * @SWG\Definition()
  */
+#[OA\Schema]
 class Playlist implements \JsonSerializable
 {
     use EntityTrait;
     use TagLinkTrait;
 
     /**
-     * @SWG\Property(description="The ID of this Playlist")
      * @var int
      */
+    #[OA\Property(description: "The ID of this Playlist")]
     public $playlistId;
 
     /**
-     * @SWG\Property(description="The userId of the User that owns this Playlist")
      * @var int
      */
+    #[OA\Property(description: "The userId of the User that owns this Playlist")]
     public $ownerId;
 
     /**
-     * @SWG\Property(description="The Name of the Playlist")
      * @var string
      */
+    #[OA\Property(description: "The Name of the Playlist")]
     public $name;
 
     /**
-     * @SWG\Property(description="The RegionId if this Playlist is specific to a Region")
      * @var int
      */
+    #[OA\Property(description: "The RegionId if this Playlist is specific to a Region")]
     public $regionId;
 
     /**
-     * @SWG\Property(description="Flag indicating if this is a dynamic Playlist")
      * @var int
      */
+    #[OA\Property(description: "Flag indicating if this is a dynamic Playlist")]
     public $isDynamic;
 
     /**
-     * @SWG\Property(description="Filter Name for a Dynamic Playlist")
      * @var string
      */
+    #[OA\Property(description: "Filter Name for a Dynamic Playlist")]
     public $filterMediaName;
 
     /**
-     * @SWG\Property(description="Which logical operator should be used when filtering by multiple Plalust names? OR|AND")
      * @var string
      */
+    #[OA\Property(description: "Which logical operator should be used when filtering by multiple Plalust names? OR|AND")]
     public $filterMediaNameLogicalOperator;
 
     /**
-     * @SWG\Property(description="Filter Tags for a Dynamic Playlist")
      * @var string
      */
+    #[OA\Property(description: "Filter Tags for a Dynamic Playlist")]
     public $filterMediaTags;
 
     /**
-     * @SWG\Property(description="Flag indicating whether to filter by exact Tag match")
      * @var int
      */
+    #[OA\Property(description: "Flag indicating whether to filter by exact Tag match")]
     public $filterExactTags;
 
     /**
-     * @SWG\Property(description="Which logical operator should be used when filtering by multiple Tags? OR|AND")
      * @var string
      */
+    #[OA\Property(description: "Which logical operator should be used when filtering by multiple Tags? OR|AND")]
     public $filterMediaTagsLogicalOperator;
 
     /**
-     * @SWG\Property(description="The ID of the folder to filter media items by")
      * @var int
      */
+    #[OA\Property(description: "The ID of the folder to filter media items by")]
     public $filterFolderId;
 
     /**
-     * @SWG\Property(description="Maximum number of Media items matching dynamic Playlist filters")
      * @var int
      */
+    #[OA\Property(description: "Maximum number of Media items matching dynamic Playlist filters")]
     public $maxNumberOfItems;
 
     /**
      * @var string
-     * @SWG\Property(
-     *  description="The datetime this entity was created"
-     * )
      */
+    #[OA\Property(description: "The datetime this entity was created")]
     public $createdDt;
 
     /**
      * @var string
-     * @SWG\Property(
-     *  description="The datetime this entity was last modified"
-     * )
      */
+    #[OA\Property(description: "The datetime this entity was last modified")]
     public $modifiedDt;
 
     /**
      * @var int
-     * @SWG\Property(
-     *  description="A read-only estimate of this Layout's total duration in seconds. This is equal to the longest region duration and is valid when the layout status is 1 or 2."
-     * )
      */
+    #[OA\Property(description: "A read-only estimate of this Layout's total duration in seconds. This is equal to the longest region duration and is valid when the layout status is 1 or 2.")]
     public $duration = 0;
 
     /**
      * @var int
-     * @SWG\Property(
-     *     description="Flag indicating whether this Playlists requires a duration update"
-     * )
      */
+    #[OA\Property(description: "Flag indicating whether this Playlists requires a duration update")]
     public $requiresDurationUpdate;
 
     /**
      * @var string
-     * @SWG\Property(
-     *  description="The option to enable the collection of Playlist Proof of Play statistics"
-     * )
      */
+    #[OA\Property(description: "The option to enable the collection of Playlist Proof of Play statistics")]
     public $enableStat;
 
     /**
-     * @SWG\Property(description="Tags associated with this Playlist, array of TagLink objects")
      * @var TagLink[]
      */
+    #[OA\Property(description: "Tags associated with this Playlist, array of TagLink objects")]
     public $tags = [];
 
     /**
-     * @SWG\Property(description="An array of Widgets assigned to this Playlist")
      * @var Widget[]
      */
+    #[OA\Property(description: "An array of Widgets assigned to this Playlist")]
     public $widgets = [];
 
     /**
-     * @SWG\Property(description="An array of permissions")
      * @var Permission[]
      */
+    #[OA\Property(description: "An array of permissions")]
     public $permissions = [];
 
     /**
@@ -191,15 +181,15 @@ class Playlist implements \JsonSerializable
     public $groupsWithPermissions;
 
     /**
-     * @SWG\Property(description="The id of the Folder this Playlist belongs to")
      * @var int
      */
+    #[OA\Property(description: "The id of the Folder this Playlist belongs to")]
     public $folderId;
 
     /**
-     * @SWG\Property(description="The id of the Folder responsible for providing permissions for this Playlist")
      * @var int
      */
+    #[OA\Property(description: "The id of the Folder responsible for providing permissions for this Playlist")]
     public $permissionsFolderId;
 
     /** @var TagLink[] */
@@ -347,7 +337,7 @@ class Playlist implements \JsonSerializable
      * @throws DuplicateEntityException
      * @throws NotFoundException
      */
-    public function validate()
+    public function validate($isPlaylistReassigned = false)
     {
         // check for duplicates,
         // we check for empty playlist name due to layouts existing in the CMS before upgrade to v2
@@ -361,7 +351,11 @@ class Playlist implements \JsonSerializable
             ]);
 
             if (count($duplicates) > 0) {
-                throw new DuplicateEntityException(sprintf(__("You already own a Playlist called '%s'. Please choose another name."), $this->name));
+                ($isPlaylistReassigned)
+                    ? $this->name = $this->getReassignedPlaylistName()
+                    : throw new DuplicateEntityException(
+                        sprintf(__("You already own a Playlist called '%s'. Please choose another name."), $this->name)
+                     );
             }
         }
 
@@ -581,11 +575,12 @@ class Playlist implements \JsonSerializable
             'saveWidgets' => true,
             'notify' => true,
             'validate' => true,
-            'auditPlaylist' => true
+            'auditPlaylist' => true,
+            'isPlaylistReassigned' => false
         ], $options);
 
         if ($options['validate']) {
-            $this->validate();
+            $this->validate($options['isPlaylistReassigned']);
         }
 
         // if we are auditing and editing a regionPlaylist then get layout specific campaignId
@@ -1186,5 +1181,48 @@ class Playlist implements \JsonSerializable
         }
 
         return $playlistMappings;
+    }
+
+    /**
+     * Get the reassigned playlist name
+     * @return string
+     */
+    private function getReassignedPlaylistName(): string
+    {
+        // Append a numeric suffix if the target user already has a playlist item with this name
+        // However, we first need to check similar names to ensure that there's no conflict in renaming the playlist.
+
+        // Get all similar names
+        $params = [];
+        $checkSQL = 'SELECT `name` FROM `playlist` WHERE `name` LIKE :name AND ownerId = :ownerId';
+
+        $params['name'] = $this->name . '%';
+        $params['ownerId'] = $this->ownerId;
+
+        $entries = $this->getStore()->select($checkSQL, $params);
+
+        $count = [];
+
+        foreach ($entries as $entry) {
+            $name = $entry['name'];
+
+            if ($name === $this->name) {
+                $count[] = 0;
+                continue;
+            }
+
+            // We look for playlists that match the same name + (count suffix) so we can update the count correctly
+            if (preg_match('/^' . preg_quote($this->name, '/') . ' \((\d+)\)$/', $name, $matches)) {
+                $count[] = (int) $matches[1];
+            }
+        }
+
+        $i = 0;
+
+        while (in_array($i, $count, true)) {
+            $i++;
+        }
+
+        return $i === 0 ? $this->name : $this->name . " ($i)";
     }
 }

@@ -1,6 +1,6 @@
 <?php
 /*
- * Copyright (C) 2025 Xibo Signage Ltd
+ * Copyright (C) 2026 Xibo Signage Ltd
  *
  * Xibo - Digital Signage - https://xibosignage.com
  *
@@ -21,6 +21,7 @@
  */
 namespace Xibo\Controller;
 
+use OpenApi\Attributes as OA;
 use RobThree\Auth\TwoFactorAuth;
 use Slim\Flash\Messages;
 use Slim\Http\Response as Response;
@@ -338,8 +339,7 @@ class Login extends Base
 
             $mail->Body = $this->generateEmailBody(
                 $mail->Subject,
-                '<p>' . __('You are receiving this email because a password reminder was requested for your account. 
-                If you did not make this request, please report this email to your administrator immediately.') . '</p>'
+                '<p>' . __('You are receiving this email because a password reminder was requested for your account. If you did not make this request, please report this email to your administrator immediately.') . '</p>' //phpcs:ignore
                 . $linkButton
                 . '<p style="margin-top:10px; font-size:14px; color:#555555;">'
                 . __('If the button does not work, copy and paste the following URL into your browser:')
@@ -410,27 +410,24 @@ class Login extends Base
         return $this->render($request, $response);
     }
 
+    #[OA\Get(
+        path: '/about',
+        operationId: 'about',
+        description: 'Information about this API, such as Version code, etc',
+        summary: 'About',
+        tags: ['misc']
+    )]
+    #[OA\Response(
+        response: 200,
+        description: 'successful response',
+        content: new OA\JsonContent(
+            type: 'object',
+            additionalProperties: new OA\AdditionalProperties(type: 'string')
+        )
+    )]
     /**
      * Shows information about Xibo
      *
-     * @SWG\Get(
-     *  path="/about",
-     *  operationId="about",
-     *  tags={"misc"},
-     *  summary="About",
-     *  description="Information about this API, such as Version code, etc",
-     *  @SWG\Response(
-     *      response=200,
-     *      description="successful response",
-     *      @SWG\Schema(
-     *          type="object",
-     *          additionalProperties={
-     *              "title"="version",
-     *              "type"="string"
-     *          }
-     *      )
-     *  )
-     * )
      * @param Request $request
      * @param Response $response
      * @return \Psr\Http\Message\ResponseInterface|Response
@@ -441,13 +438,20 @@ class Login extends Base
     {
         $state = $this->getState();
 
-        if ($request->isXhr()) {
+        if ($request->isXhr() || $this->isApi($request)) {
             $state->template = 'about-text';
         } else {
             $state->template = 'about-page';
         }
 
-        $state->setData(['version' => Environment::$WEBSITE_VERSION_NAME, 'sourceUrl' => $this->getConfig()->getThemeConfig('cms_source_url')]);
+        // TODO: output source URL from settings.
+        $state->setData([
+            'version' => Environment::$WEBSITE_VERSION_NAME,
+            'revision' => Environment::getGitCommit(),
+            'playerVersion' => Environment::$PLAYER_SUPPORT,
+            'isDevMode' => Environment::isDevMode(),
+            'sourceUrl' => 'https://github.com/xibosignage/xibo-cms',
+        ]);
 
         return $this->render($request, $response);
     }
